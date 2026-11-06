@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'mcp_settings_tab.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'widgets/aurora_background.dart';
 import 'widgets/ide_sidebar.dart';
@@ -64,7 +65,15 @@ class _IdeShellState extends ConsumerState<IdeShell> {
                 primary: Color(0xFF0066B8), // VSCode blue accent
               ),
             ),
-      child: Scaffold(
+      child: CallbackShortcuts(
+       bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyM, control: true): () => openVoiceAssistant(context),
+        const SingleActivator(LogicalKeyboardKey.keyB, control: true): () =>
+            ref.read(isSidebarOpenProvider.notifier).state = !ref.read(isSidebarOpenProvider),
+       },
+       child: Focus(
+        autofocus: true,
+        child: Scaffold(
         backgroundColor: themeMode == ThemeMode.light
             ? Colors.white
             : IdePalette.backgroundBase,
@@ -111,13 +120,13 @@ class _IdeShellState extends ConsumerState<IdeShell> {
           ),
         ),
       ),
+       ),
+      ),
     );
   }
 
   Widget _buildFerIdeHeader() {
     final language = ref.watch(languageProvider);
-    final langStr = language == AppLanguage.tr ? 'tr' : 'en';
-    final loc = ref.watch(localizationProvider);
 
     final isDark = ref.watch(themeModeProvider) == ThemeMode.dark;
     final selectedModel = ref.watch(selectedModelProvider);
@@ -156,36 +165,49 @@ class _IdeShellState extends ConsumerState<IdeShell> {
               const Icon(Icons.auto_awesome,
                   color: IdePalette.accentSoft, size: 22),
               const SizedBox(width: 8),
-              Text('FerIDE Beta v5.3.4',
+              Text('FerIDE',
                   style: TextStyle(
                       color: textColor,
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w700,
                       fontSize: 18,
-                      letterSpacing: 1.0)),
+                      letterSpacing: 0.5)),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: IdePalette.accentSoft.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(kFerideVersion,
+                    style: TextStyle(color: IdePalette.accentSoft, fontSize: 11, fontWeight: FontWeight.w600)),
+              ),
 
             ],
           ),
-          Row(
+          const SizedBox(width: 16),
+          Flexible(
+           child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            reverse: true,
+            child: Row(
             children: [
-              // Live Session Button
-              _buildIconButton(
-                context,
-                icon: Icons.record_voice_over,
-                onTap: () {
-                  showDialog(
-                    context: context,
-                    builder: (context) => const Dialog(
-                      backgroundColor: Colors.transparent,
-                      elevation: 0,
-                      insetPadding: EdgeInsets.all(24),
-                      child: LiveSessionView(),
-                    ),
-                  );
-                },
-                tooltip: loc['live_session']?[langStr] ?? 'Canlı Oturum',
-                glassColor: glassColor,
-                iconColor: IdePalette.accentSoft, // Make it pop
+              // Sesli asistan (Ctrl+M)
+              Tooltip(
+                message: 'Feride ile sesli konuş (Ctrl+M)',
+                child: FilledButton.icon(
+                  onPressed: () => openVoiceAssistant(context),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: IdePalette.accentSoft,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  ),
+                  icon: const Icon(Icons.mic_rounded, size: 18),
+                  label: const Text('Sesli Konuş', style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
               ),
+              const SizedBox(width: 12),
+              const _PermissionChip(),
               const SizedBox(width: 16),
               // Thinking Mode Switch
               Container(
@@ -325,7 +347,11 @@ class _IdeShellState extends ConsumerState<IdeShell> {
                                   fontWeight: FontWeight.w500),
                               items: models.map((model) {
                                 return DropdownMenuItem(
-                                    value: model, child: Text(model));
+                                    value: model,
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(maxWidth: 240),
+                                      child: Text(model, overflow: TextOverflow.ellipsis),
+                                    ));
                               }).toList(),
                               onChanged: isSwitching
                                   ? null
@@ -420,7 +446,9 @@ class _IdeShellState extends ConsumerState<IdeShell> {
                 iconColor: iconColor,
               ),
             ],
-          )
+          ),
+           ),
+          ),
         ],
       ),
     );
@@ -500,7 +528,7 @@ class _IdeShellState extends ConsumerState<IdeShell> {
   }
 }
 
-// Geniş Ekran Ayarlar & Model Merkezi Modalı (v5.3.4)
+// Geniş Ekran Ayarlar & Model Merkezi Modalı (v5.3.6)
 class SettingsDialogWidget extends ConsumerStatefulWidget {
   const SettingsDialogWidget({super.key});
 
@@ -528,7 +556,7 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
   Map<String, String> _hfHeaders() {
     final token = ref.read(settingsProvider).hfToken.trim();
     return {
-      'User-Agent': 'FerIDE-5.3.4',
+      'User-Agent': 'FerIDE-5.3.6',
       if (token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
@@ -3262,6 +3290,66 @@ class FloatingDownloadBar extends ConsumerWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+
+/// Uygulama sürümü (başlık, pencere adı ve hakkında bilgisi tek yerden).
+const String kFerideVersion = 'v5.3.6';
+
+/// Sesli asistan penceresini açar (başlıktaki düğme ve Ctrl+M).
+void openVoiceAssistant(BuildContext context) {
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    builder: (_) => const Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: EdgeInsets.all(24),
+      child: LiveSessionView(),
+    ),
+  );
+}
+
+/// Başlıktaki izin modu rozeti: güvenlik seviyesini her an görünür kılar.
+class _PermissionChip extends ConsumerWidget {
+  const _PermissionChip();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    PermissionMode mode;
+    try {
+      mode = ref.watch(settingsProvider.select((s) => s.permissionMode));
+    } catch (_) {
+      return const SizedBox.shrink(); // ayarlar henüz hazır değil (ör. testler)
+    }
+    final (icon, label, color) = switch (mode) {
+      PermissionMode.ask => (Icons.shield_rounded, 'Her şeyi sor', const Color(0xFF22C55E)),
+      PermissionMode.autoEdit => (Icons.shield_outlined, 'Düzenleme serbest', const Color(0xFF38BDF8)),
+      PermissionMode.fullAuto => (Icons.bolt_rounded, 'Tam otonom', const Color(0xFFF59E0B)),
+    };
+    return PopupMenuButton<PermissionMode>(
+      tooltip: 'İzin modu: ${permissionModeLabel(mode)}',
+      initialValue: mode,
+      onSelected: (m) => ref.read(settingsProvider.notifier).setPermissionMode(m),
+      itemBuilder: (_) => [
+        for (final m in PermissionMode.values)
+          PopupMenuItem(value: m, child: Text(permissionModeLabel(m), style: const TextStyle(fontSize: 13))),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+        ]),
       ),
     );
   }

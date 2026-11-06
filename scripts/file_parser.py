@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE Universal File, CAD, Media & Document Parser (v5.3.4)
+FerIDE Universal File, CAD, Media & Document Parser (v5.3.6)
 ============================================================
 Reads, analyzes, and extracts structured content + visual previews from:
 - AutoCAD & CAD (.dwg, .dxf) via LibreDWG (dwg2dxf/dwgread) + ezdxf + Matplotlib PNG preview

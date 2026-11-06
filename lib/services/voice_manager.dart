@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'app_paths.dart';
+import 'audio_out.dart';
 import 'process_manager.dart';
 
 final voiceManagerProvider = StateNotifierProvider<VoiceManager, VoiceState>((ref) {
@@ -24,6 +24,10 @@ class VoiceState {
   final String? lastError;
   final int pendingQueueCount;
 
+  /// Canlı oturumda mikrofon seviyesi (0..1) ve kullanıcının o an konuşup konuşmadığı.
+  final double micLevel;
+  final bool userSpeaking;
+
   VoiceState({
     this.isRecording = false,
     this.isProcessingSTT = false,
@@ -33,6 +37,8 @@ class VoiceState {
     this.transcriptSeq = 0,
     this.lastError,
     this.pendingQueueCount = 0,
+    this.micLevel = 0,
+    this.userSpeaking = false,
   });
 
   VoiceState copyWith({
@@ -44,6 +50,8 @@ class VoiceState {
     int? transcriptSeq,
     String? lastError,
     int? pendingQueueCount,
+    double? micLevel,
+    bool? userSpeaking,
     bool clearTranscript = false,
     bool clearError = false,
   }) {
@@ -56,6 +64,8 @@ class VoiceState {
       transcriptSeq: transcriptSeq ?? this.transcriptSeq,
       lastError: clearError ? null : (lastError ?? this.lastError),
       pendingQueueCount: pendingQueueCount ?? this.pendingQueueCount,
+      micLevel: micLevel ?? this.micLevel,
+      userSpeaking: userSpeaking ?? this.userSpeaking,
     );
   }
 }
@@ -213,11 +223,30 @@ class VoiceManager extends StateNotifier<VoiceState> {
         _channel!.stream.listen((message) {
           try {
             final decoded = jsonDecode(message);
+            final type = decoded['type'];
+            if (type == 'level') {
+              state = state.copyWith(
+                micLevel: (decoded['level'] as num?)?.toDouble() ?? 0,
+                userSpeaking: decoded['speaking'] == true,
+              );
+              return;
+            }
+            if (type == 'speech_start') {
+              state = state.copyWith(userSpeaking: true);
+              return;
+            }
+            if (type == 'speech_end') {
+              state = state.copyWith(userSpeaking: false);
+              return;
+            }
             if (decoded['type'] == 'transcript' || decoded['event'] == 'transcription') {
               final text = (decoded['text'] ?? '').toString().trim();
               if (text.isNotEmpty) {
                 state = state.copyWith(
                   isRecording: false,
+                  isProcessingSTT: false,
+                  userSpeaking: false,
+                  micLevel: 0,
                   lastTranscript: text,
                   transcriptSeq: state.transcriptSeq + 1,
                   clearError: true,
@@ -262,6 +291,9 @@ class VoiceManager extends StateNotifier<VoiceState> {
 
   Future<String?> stopRecording({bool fromLiveSession = false}) async {
     final bool wasLive = fromLiveSession || state.isLiveSession;
+    if (state.micLevel != 0 || state.userSpeaking) {
+      state = state.copyWith(micLevel: 0, userSpeaking: false);
+    }
     await _audioStreamSub?.cancel();
     _audioStreamSub = null;
     if (_channel != null) {
@@ -401,17 +433,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
     }
   }
 
-  AudioPlayer? _audioPlayer;
-  bool _playerCreated = false;
-
-  void _ensurePlayer() {
-    if (!_playerCreated) {
-      _playerCreated = true;
-      _audioPlayer = AudioPlayer();
-    }
-  }
-
-  AudioPlayer? get _player => _playerCreated ? _audioPlayer : null;
+  final AudioOut _audio = AudioOut();
 
   final List<String> _ttsQueue = [];
   bool _isProcessingQueue = false;
@@ -458,12 +480,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
   void clearQueue() {
     _ttsSessionGen++;
     _ttsQueue.clear();
-    final player = _player;
-    if (player != null) {
-      try {
-        player.stop();
-      } catch (_) {}
-    }
+    _audio.stop();
     _isProcessingQueue = false;
     state = state.copyWith(isSpeaking: false, pendingQueueCount: 0);
   }
@@ -521,34 +538,8 @@ class VoiceManager extends StateNotifier<VoiceState> {
         tempFile = File(p.join(tempDir.path, 'feride_tts_$ts.wav'));
         await tempFile.writeAsBytes(audioBytes);
 
-        final fileSize = audioBytes.length;
-        if (fileSize > 1000 && (expectedGen == null || expectedGen == _ttsSessionGen)) {
-          _ensurePlayer();
-          final player = _player;
-          if (player != null) {
-            await player.setVolume(1.5);
-            await player.play(DeviceFileSource(tempFile.path));
-            int byteRate = 44100;
-            if (audioBytes.length >= 32) {
-              final br = audioBytes[28] |
-                  (audioBytes[29] << 8) |
-                  (audioBytes[30] << 16) |
-                  (audioBytes[31] << 24);
-              if (br > 8000 && br < 1000000) {
-                byteRate = br;
-              }
-            }
-            final durationSec = (fileSize / byteRate).ceil() + 2;
-            await player.onPlayerComplete.first.timeout(
-              Duration(seconds: durationSec.clamp(3, 300)),
-              onTimeout: () {
-                try {
-                  player.stop();
-                } catch (_) {}
-                return null;
-              },
-            );
-          }
+        if (audioBytes.length > 1000 && (expectedGen == null || expectedGen == _ttsSessionGen)) {
+          await _audio.play(tempFile.path);
         }
       }
     } catch (e) {
@@ -567,10 +558,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
 
   Future<void> stopSpeaking() async {
     _ttsSessionGen++;
-    try {
-      final player = _player;
-      if (player != null) await player.stop();
-    } catch (_) {}
+    await _audio.stop();
     _isProcessingQueue = false;
     state = state.copyWith(isSpeaking: false);
   }
@@ -583,9 +571,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
       _audioRecorder!.dispose();
       _isAudioRecorderDisposed = true;
     }
-    if (_playerCreated && _audioPlayer != null) {
-      _audioPlayer!.dispose();
-    }
+    _audio.dispose();
     super.dispose();
   }
 }

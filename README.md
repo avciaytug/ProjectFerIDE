@@ -1,8 +1,8 @@
-# FerIDE Beta v5.3.4
+# FerIDE Beta v5.3.6
 
 **FerIDE**, yerel GGUF yapay zeka modellerini (`llama.cpp` Vulkan / Apple Metal / ROCm / CUDA / CPU) tam otonom ajan mimarisi (**Aegis Hafıza + MCP + Yetenekler + Sesli Asistan + Evrensel Dosya & AutoCAD Stüdyosu**) ile birleştiren çapraz platform (**Linux, Windows, macOS**) yerel yapay zeka geliştirme ve çalışma ortamıdır.
 
-## ✨ v5.3.4 Öne Çıkan Özellikler
+## ✨ v5.3.6 Öne Çıkan Özellikler
 
 - **Çapraz Platform Otonom Kurulum (`kurulum.sh` / `kurulum_windows.bat` / `kurulum_macos.command`):** Sıfırdan kurulmuş Linux, Windows ve macOS sistemlerde bağımlılıkları, Python sanal ortamını, izinleri ve `llama.cpp` motorunu otonom olarak hazırlar.
 - **Kusursuz Sesli Konuşma (STT & TTS):**

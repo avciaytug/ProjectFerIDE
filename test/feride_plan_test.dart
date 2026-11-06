@@ -113,7 +113,11 @@ void main() {
     });
   });
 
-  group('Task 3: ProcessManager (sunucu yaşam döngüsü)', () {
+  // Gerçek ses sunucularını başlatıp öldüren entegrasyon testleri: geliştirme
+  // makinesinde çalışan FerIDE'nin sunucularını etkilemesin diye varsayılan
+  // olarak atlanır. Çalıştırmak için: FERIDE_INTEGRATION=1 flutter test
+  final runIntegration = Platform.environment['FERIDE_INTEGRATION'] == '1';
+  group('Task 3: ProcessManager (sunucu yaşam döngüsü)', skip: !runIntegration, () {
     test('startAll: çalışmayan sunucuları başlatır, PID listesi dolar', () async {
       final pm = ProcessManager();
       await pm.startAll();

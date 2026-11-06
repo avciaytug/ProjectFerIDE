@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE STT (Speech-to-Text) Sunucusu (v5.3.4 — Linux / Windows / macOS)
+FerIDE STT (Speech-to-Text) Sunucusu (v5.3.6 — Linux / Windows / macOS)
 =======================================================================
 1) PyAV `metadata_errors` uyumsuzluğundan %100 bağımsız: gelen her türlü ses
    verisini (WAV, WebM, M4A, MP3, OGG, 48kHz/44.1kHz/16kHz, stereo/mono)
@@ -222,8 +222,23 @@ HALLUCINATION_RE = re.compile(
 )
 
 
+def remove_dc(x: np.ndarray, win: int = 801) -> np.ndarray:
+    """DC kaymasını ve ~20 Hz altı uğultuyu kaldırır.
+
+    Bazı dahili mikrofonlar (örn. AMD SoundWire) sinyale sabit bir DC ofseti
+    ekler; bu hem sessizlik tespitini hem de normalizasyonu bozar.
+    """
+    if len(x) == 0:
+        return x
+    x = x - float(np.mean(x))
+    if len(x) > win * 2:
+        kernel = np.ones(win, dtype=np.float32) / win
+        x = x - np.convolve(x, kernel, mode="same")
+    return x.astype(np.float32)
+
+
 def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr") -> str:
-    audio_f32 = decode_audio_bytes_to_16k_float32(audio_bytes)
+    audio_f32 = remove_dc(decode_audio_bytes_to_16k_float32(audio_bytes))
     if len(audio_f32) < 1600:  # < 0.1 saniye
         return ""
 

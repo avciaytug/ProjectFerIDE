@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  FerIDE Beta v5.3.5 — Tam Otonom Kurulum, Bağımlılık ve Onarım Sihirbazı
+#  FerIDE Beta v5.3.6 — Tam Otonom Kurulum, Bağımlılık ve Onarım Sihirbazı
 #  Sıfırdan formatlanmış Ubuntu / Kubuntu / Debian / Fedora / Arch sistemlerde
 #  tek tıkla veya terminalden tüm bağımlılıkları kurar, izinleri ve sembolik
 #  bağları onarır, gömülü llama.cpp + mmproj + LibreDWG + Python ortamını
@@ -62,7 +62,7 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 err()   { echo -e "${RED}[✗]${NC} $*"; }
 
 echo -e "${BLUE}================================================================${NC}"
-echo -e "${BLUE}   FerIDE Beta v5.3.5 — Otonom Sistem Kurulum Sihirbazı         ${NC}"
+echo -e "${BLUE}   FerIDE Beta v5.3.6 — Otonom Sistem Kurulum Sihirbazı         ${NC}"
 echo -e "${BLUE}   Konum: ${APP_DIR}${NC}"
 echo -e "${BLUE}================================================================${NC}"
 echo ""
@@ -395,7 +395,7 @@ mkdir -p "$APP_MENU_DIR"
 DESKTOP_CONTENT="[Desktop Entry]
 Version=1.0
 Type=Application
-Name=FerIDE Beta v5.3.5
+Name=FerIDE Beta v5.3.6
 GenericName=Otonom Yerel Yapay Zeka IDE
 Comment=Otonom Yerel Yapay Zeka Asistanı ve Evrensel Dosya Stüdyosu
 Exec=\"$APP_DIR/run.sh\"
@@ -413,7 +413,7 @@ chmod +x "$APP_MENU_DIR/feride.desktop"
 PORTABLE_DESKTOP_CONTENT="[Desktop Entry]
 Version=1.0
 Type=Application
-Name=FerIDE Beta v5.3.5
+Name=FerIDE Beta v5.3.6
 GenericName=Otonom Yerel Yapay Zeka IDE
 Comment=Otonom Yerel Yapay Zeka Asistanı ve Evrensel Dosya Stüdyosu
 Exec=sh -c 'DIR=\"\$(cd \"\$(dirname \"\$1\")\" && pwd)\" && exec \"\$DIR/run.sh\"' -- %k
@@ -449,9 +449,9 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$
 
 echo ""
 echo -e "${GREEN}================================================================${NC}"
-echo -e "${GREEN}   🎉 FerIDE Beta v5.3.5 Kurulumu Başarıyla Tamamlandı!          ${NC}"
+echo -e "${GREEN}   🎉 FerIDE Beta v5.3.6 Kurulumu Başarıyla Tamamlandı!          ${NC}"
 echo -e "${GREEN}================================================================${NC}"
-echo -e "  • Uygulamayı masaüstündeki ${BLUE}FerIDE Beta v5.3.5${NC} simgesinden veya"
+echo -e "  • Uygulamayı masaüstündeki ${BLUE}FerIDE Beta v5.3.6${NC} simgesinden veya"
 echo -e "    klasör içindeki ${BLUE}baslat.sh${NC} / ${BLUE}run.sh${NC} dosyasına tıklayarak açabilirsiniz."
 echo -e "  • Model Merkezi'nden dilediğiniz GGUF modelini tek tıkla indirebilirsiniz."
 echo -e "  • Ayarlar > Genel sekmesinden llama.cpp ve sistem bileşenlerini her zaman"

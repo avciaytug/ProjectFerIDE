@@ -26,7 +26,7 @@ void main() async {
   }
 
   // ============================================================================
-  // KÜRESEL HATA AĞI (v5.3.4): Bir build/runtime hatası tüm paneli kırmızı
+  // KÜRESEL HATA AĞI (v5.3.6): Bir build/runtime hatası tüm paneli kırmızı
   // "tema" ekranına boğmasın — FerIDE tarzında okunabilir bir hata kartı
   // göstersin + hata ~/.feride/logs/feride_errors.log dosyasına yazılsın.
   // ============================================================================
@@ -47,7 +47,7 @@ void main() async {
     size: Size(1420, 880),
     minimumSize: Size(980, 640),
     center: true,
-    title: 'FerIDE Beta v5.3.5',
+    title: 'FerIDE Beta v5.3.6',
   );
   if (!kIsWeb) {
     windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -133,7 +133,7 @@ class _FerIDEAppState extends ConsumerState<FerIDEApp> with WindowListener {
     final themeMode = ref.watch(themeModeProvider);
 
     return MaterialApp(
-      title: 'FerIDE Beta v5.3.5',
+      title: 'FerIDE Beta v5.3.6',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       // v5.3.1: Build/runtime çöküşlerinde kırmızı "tema" ekranı yerine
@@ -144,7 +144,7 @@ class _FerIDEAppState extends ConsumerState<FerIDEApp> with WindowListener {
         final data = MediaQuery.of(context);
         return MediaQuery(
           data: data.copyWith(
-            textScaler: const TextScaler.linear(1.15),
+            textScaler: const TextScaler.linear(1.05),
           ),
           child: child!,
         );

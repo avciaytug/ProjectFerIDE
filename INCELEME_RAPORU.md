@@ -1,5 +1,30 @@
 # FerIDE inceleme ve yenileme raporu
 
+## v5.3.6 — Sesli iletişim neden çalışmıyordu ve nasıl düzeltildi
+
+Python ses servisleri (Piper TTS, Whisper STT) kendi başlarına kusursuzdu: ses üretimi 0,12 sn, deşifre 0,6 sn. Sorun bu servisleri birbirine bağlayan katmandaydı. Birbirine eklenen dört neden vardı:
+
+| # | Neden | Sonuç | Düzeltme |
+|---|---|---|---|
+| S1 | **Mikrofon DC kayması.** Dahili AMD SoundWire mikrofonu sinyale sabit −0,23 ofset ekliyor; sessiz ortamda bile RMS 0,23 ölçülüyor. Canlı oturum VAD'ı yalnızca ham enerjiye bakıyordu. | VAD konuşmanın hiç bitmediğini sanıyordu: "speech_start" geldi, "speech_end" hiç gelmedi, deşifre yapılmadı, FerIDE yanıt vermedi. | Yeni VAD 300–3400 Hz konuşma bandına bakıyor (DC'ye ve uğultuya bağışık). Gürültü tabanını uyarlıyor ve tek bir konuşmayı en fazla 25 sn tutuyor (asla takılı kalmaz). STT de DC'yi temizliyor. |
+| S2 | Sesli oturum Ollama'ya (11434) bağlanıyordu; Ollama kurulu değil. | Model hiç yanıt vermiyordu. | v5.3.5'te düzeltildi: aynı llama-server kullanılıyor. |
+| S3 | Ses sunucusu "çalışıyor mu" kararı süreç adına (`pgrep`) göre veriliyordu. | Port boşken aynı adda başka bir süreç varsa VAD hiç başlatılmıyordu. Eski sürüm sunucular yenilenmiyordu. | Karar portu dinleyen sunucuya göre veriliyor. Betik değişince eski sunucu otomatik yenileniyor (sürüm parmak izi). |
+| S4 | Canlı oturum ekranı, oturum kimliği ilk cümlede değiştiği için motor olaylarını kaçırabiliyordu. | Bazen yanıt metni ve sesi gelmiyordu. | Ekran yeniden yazıldı: oturum baştan oluşturuluyor, durum makinesi ile çalışıyor. |
+
+Ek iyileştirmeler:
+- Gerçek mikrofon seviyesine tepki veren küre.
+- "Sözünü kes" (barge-in).
+- Onay gerektiğinde sesli uyarı.
+- Boştayken animasyon durduğu için sıfır CPU kullanımı.
+- **Ctrl+M** her yerden sesli asistanı açar; başlıkta belirgin bir "Sesli Konuş" düğmesi var.
+- İzin modu rozeti başlıkta her an görünür ve tek tıkla değiştirilebilir.
+- TTS çalma `audioplayers`/GStreamer yerine işletim sisteminin yerleşik oynatıcısıyla yapılıyor (`pw-play`/`paplay`/`aplay`, `afplay`, SoundPlayer). Daha hafif, bir native bağımlılık eksik.
+- Testler artık geliştirme makinesindeki gerçek ses sunucularını başlatıp öldürmüyor (`FERIDE_INTEGRATION=1` ile isteğe bağlı).
+- Native Linux derlemesi (cmake/clang) başarıyla yapıldı.
+
+---
+
+
 Tarih: 06.11.2026 · Temel: FerIDE Beta v5.3.5 · Değişiklikler git ile izleniyor (`git log`, `git diff 8c1db19`)
 
 ## 1. Bulunan sorunlar

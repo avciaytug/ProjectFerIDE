@@ -420,7 +420,7 @@ class SystemInstallerNotifier extends StateNotifier<SystemHealthState> {
       final resp = await http
           .get(
             Uri.parse('https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10'),
-            headers: {'Accept': 'application/vnd.github+json', 'User-Agent': 'FerIDE-5.3.5'},
+            headers: {'Accept': 'application/vnd.github+json', 'User-Agent': 'FerIDE-5.3.6'},
           )
           .timeout(const Duration(seconds: 20));
 
@@ -666,7 +666,7 @@ echo "source-build" > "$targetDirPath/VERSION.txt"
 
   Future<void> _downloadFileWithProgress(String url, String destPath) async {
     final client = HttpClient();
-    client.userAgent = 'FerIDE-5.3.5';
+    client.userAgent = 'FerIDE-5.3.6';
     try {
       final req = await client.getUrl(Uri.parse(url));
       final res = await req.close();

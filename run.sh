@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  FerIDE Beta v5.3.5 — Otonom Başlatıcı (run.sh)
+#  FerIDE Beta v5.3.6 — Otonom Başlatıcı (run.sh)
 #  Klasör nereye taşınırsa taşınsın (veya exFAT/USB yedekten yeni çıkarsa bile)
 #  çalıştırma izinlerini, .so bağlarını ve ~/.feride ortamını kendi kendine
 #  onarıp FerIDE'yi anında başlatır.

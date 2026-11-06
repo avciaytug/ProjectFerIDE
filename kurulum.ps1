@@ -18,7 +18,7 @@ foreach ($sd in $SubDirs) {
 }
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  FerIDE Beta v5.3.5 — Windows Otonom Kurulum Sihirbazı         " -ForegroundColor Cyan
+Write-Host "  FerIDE Beta v5.3.6 — Windows Otonom Kurulum Sihirbazı         " -ForegroundColor Cyan
 Write-Host "  Konum: $AppDir" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
@@ -100,7 +100,7 @@ $LlamaDir = Join-Path $FerideHome "bin\llama-cpp"
 $LlamaExe = Join-Path $LlamaDir "llama-server.exe"
 if (!(Test-Path $LlamaExe)) {
     try {
-        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5" -Headers @{ "User-Agent" = "FerIDE-5.3.5" }
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5" -Headers @{ "User-Agent" = "FerIDE-5.3.6" }
         $ChosenAsset = $null
         foreach ($rel in $Releases) {
             foreach ($a in $rel.assets) {
@@ -158,19 +158,19 @@ if (!(Test-Path $WinExe) -and ($null -ne (Get-Command flutter -ErrorAction Silen
 
 try {
     $DesktopPath = [Environment]::GetFolderPath("Desktop")
-    $ShortcutFile = Join-Path $DesktopPath "FerIDE Beta v5.3.5.lnk"
+    $ShortcutFile = Join-Path $DesktopPath "FerIDE Beta v5.3.6.lnk"
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($ShortcutFile)
     $Shortcut.TargetPath = Join-Path $AppDir "baslat_windows.bat"
     $Shortcut.WorkingDirectory = $AppDir
-    $Shortcut.Description = "FerIDE Beta v5.3.5 - Otonom Yerel Yapay Zeka IDE"
+    $Shortcut.Description = "FerIDE Beta v5.3.6 - Otonom Yerel Yapay Zeka IDE"
     $Shortcut.Save()
     Write-Host "  [OK] Masaüstü kısayolu oluşturuldu: $ShortcutFile" -ForegroundColor Green
 } catch {}
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "  FerIDE Beta v5.3.5 Windows Kurulumu Tamamlandı!               " -ForegroundColor Green
+Write-Host "  FerIDE Beta v5.3.6 Windows Kurulumu Tamamlandı!               " -ForegroundColor Green
 Write-Host "  Başlatmak için 'baslat_windows.bat' dosyasına çift tıklayın.  " -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Green
 

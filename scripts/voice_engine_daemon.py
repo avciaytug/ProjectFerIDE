@@ -1,181 +1,195 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE Voice Engine Daemon (v5.3.4 — Linux / Windows / macOS)
-=============================================================
-Silero VAD (varsa) veya adaptif NumPy RMS VAD + STT Sunucusu (Port 5052) köprüsü.
-Canlı Ses Oturumu (ws://127.0.0.1:5051) için konuşma başlangıç/bitişini algılar
-ve `{"type": "transcript", "event": "transcription", "text": ...}` gönderir.
+FerIDE Canlı Ses Köprüsü (VAD) — ws://127.0.0.1:5051
+=====================================================
+İstemci 16 kHz mono int16 PCM gönderir. Bu servis konuşmanın başını ve sonunu
+algılar, biten konuşmayı STT sunucusuna (5052) verir ve şu mesajları yollar:
+
+  {"type": "level", "level": 0..1, "speaking": bool}   ~10/sn (arayüz için)
+  {"type": "speech_start"}
+  {"type": "speech_end"}
+  {"type": "transcript", "event": "transcription", "text": "..."}
+
+Algılama, ham enerji yerine 300–3400 Hz konuşma bandındaki enerjiye bakar.
+Böylece mikrofonların ürettiği DC kayması (bazı dahili AMD/Intel mikrofonlarda
+±0.2 düzeyinde) ve düşük frekanslı uğultu VAD'ı yanıltmaz. Gürültü tabanı
+sürekli uyarlanır; bu yüzden ortam sessizliği hiçbir zaman "konuşma" sayılmaz.
 """
 
 import asyncio
 import io
 import json
-import os
+import time
 import urllib.request
 import wave
-from urllib.error import URLError
 
 import numpy as np
 import websockets
 
-HOME_DIR = os.path.expanduser("~")
-TORCH_HUB_DIR = os.path.join(HOME_DIR, ".cache", "torch_hub_feride")
 SAMPLE_RATE = 16000
-VAD_THRESHOLD = 0.42
-SILENCE_DURATION = 1.25
+FRAME = 512                       # 32 ms
+FRAME_SEC = FRAME / SAMPLE_RATE
+SILENCE_TO_END = 0.9              # bu kadar sessizlik konuşmayı bitirir (sn)
+MIN_SPEECH = 0.30                 # bundan kısa sesler (tık, öksürük) yok sayılır
+MAX_UTTERANCE = 25.0              # en uzun tek konuşma (sn) — asla takılı kalmaz
+PRE_ROLL_FRAMES = 10              # ilk heceyi kaçırmamak için ~320 ms geri sarma
+START_FRAMES = 3                  # konuşma sayılması için art arda çerçeve
+ABS_MIN_LEVEL = 0.0025            # mutlak alt eşik (konuşma bandı RMS)
 
-_use_torch_vad = False
-_vad_model = None
-
-try:
-    import torch
-
-    os.makedirs(TORCH_HUB_DIR, exist_ok=True)
-    torch.hub.set_dir(TORCH_HUB_DIR)
-    _vad_model, _ = torch.hub.load(
-        repo_or_dir="snakers4/silero-vad",
-        model="silero_vad",
-        force_reload=False,
-        onnx=False,
-    )
-    _use_torch_vad = True
-    print("✅ Silero VAD (PyTorch) yüklendi.")
-except Exception:
-    print("ℹ️ Yerleşik adaptif NumPy VAD motoru aktif (PyTorch gerektirmez).")
+_freqs = np.fft.rfftfreq(FRAME, 1.0 / SAMPLE_RATE)
+_band = (_freqs >= 300) & (_freqs <= 3400)
+_window = np.hanning(FRAME).astype(np.float32)
 
 
-def detect_speech_prob(audio_float32: np.ndarray, noise_floor: float = 0.005) -> float:
-    if _use_torch_vad and _vad_model is not None:
-        import torch
-
-        if len(audio_float32) == 512:
-            tensor = torch.from_numpy(audio_float32)
-            return float(_vad_model(tensor, SAMPLE_RATE).item())
-    if len(audio_float32) == 0:
-        return 0.0
-    rms = float(np.sqrt(np.mean(np.square(audio_float32))))
-    effective = max(0.0, rms - noise_floor)
-    return min(1.0, effective * 28.0)
+def band_level(frame_f32: np.ndarray) -> float:
+    """Konuşma bandındaki RMS benzeri seviye (DC ve uğultudan etkilenmez)."""
+    x = (frame_f32 - frame_f32.mean()) * _window
+    spec = np.abs(np.fft.rfft(x)) / (FRAME / 2)
+    return float(np.sqrt(np.mean(spec[_band] ** 2)) * 4.0)
 
 
-def send_pcm_to_stt_server(pcm_int16: np.ndarray) -> str:
+def remove_dc(x: np.ndarray, win: int = 801) -> np.ndarray:
+    x = x - float(np.mean(x))
+    if len(x) > win * 2:
+        x = x - np.convolve(x, np.ones(win, dtype=np.float32) / win, mode="same")
+    return x
+
+
+def transcribe(pcm_int16: np.ndarray) -> str:
+    audio = remove_dc(pcm_int16.astype(np.float32) / 32768.0)
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    if 0.0 < peak < 0.3:  # kısık mikrofonu güvenle yükselt
+        audio = audio * min(8.0, 0.5 / peak)
+    pcm = (np.clip(audio, -1, 1) * 32767).astype(np.int16)
+
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(pcm_int16.tobytes())
-    audio_data = buf.getvalue()
-
+        wf.writeframes(pcm.tobytes())
     req = urllib.request.Request(
         "http://127.0.0.1:5052/transcribe",
-        data=audio_data,
-        headers={
-            "Content-Type": "application/octet-stream",
-            "Content-Length": str(len(audio_data)),
-        },
+        data=buf.getvalue(),
+        headers={"Content-Type": "application/octet-stream"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=40) as response:
-            res_data = response.read().decode("utf-8")
-            return json.loads(res_data).get("text", "")
-    except URLError as e:
-        print(f"STT Sunucusuna ulaşılamadı: {e}")
-        return ""
-    except Exception as e:
-        print(f"STT Hata: {e}")
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode("utf-8")).get("text", "").strip()
+    except Exception as e:  # noqa: BLE001
+        print(f"STT hatası: {e}", flush=True)
         return ""
 
 
-async def handle_client(websocket):
-    print("İstemci bağlandı (Canlı Ses Oturumu). Dinleniyor...")
-    full_audio_buffer = []
-    pre_roll_buffer = []
-    is_speaking = False
-    silence_frames = 0
-    chunk_duration = 512 / SAMPLE_RATE
-    max_silence_frames = int(SILENCE_DURATION / chunk_duration)
-    byte_buffer = bytearray()
-    noise_floor = 0.004
+class Detector:
+    def __init__(self):
+        self.noise = None          # uyarlanan gürültü tabanı
+        self.speaking = False
+        self.voiced_run = 0
+        self.silence = 0.0
+        self.speech_time = 0.0
+        self.utterance: list[np.ndarray] = []
+        self.pre_roll: list[np.ndarray] = []
 
+    def threshold(self) -> float:
+        base = self.noise if self.noise is not None else ABS_MIN_LEVEL
+        return max(ABS_MIN_LEVEL, base * 3.0)
+
+    def feed(self, frame_i16: np.ndarray):
+        """Bir çerçeve işler. Dönüş: (olay|None, seviye, biten_konuşma|None)."""
+        lvl = band_level(frame_i16.astype(np.float32) / 32768.0)
+        if self.noise is None:
+            self.noise = lvl
+        voiced = lvl > self.threshold()
+        event, finished = None, None
+
+        if not self.speaking:
+            # Sessizken gürültü tabanını takip et (hızlı düş, yavaş yüksel)
+            rate = 0.2 if lvl < self.noise else 0.02
+            self.noise = (1 - rate) * self.noise + rate * lvl
+            self.pre_roll.append(frame_i16)
+            if len(self.pre_roll) > PRE_ROLL_FRAMES:
+                self.pre_roll.pop(0)
+            self.voiced_run = self.voiced_run + 1 if voiced else 0
+            if self.voiced_run >= START_FRAMES:
+                self.speaking = True
+                self.utterance = list(self.pre_roll)
+                self.pre_roll.clear()
+                self.silence = 0.0
+                self.speech_time = self.voiced_run * FRAME_SEC
+                event = "speech_start"
+        else:
+            self.utterance.append(frame_i16)
+            if voiced:
+                self.silence = 0.0
+                self.speech_time += FRAME_SEC
+            else:
+                self.silence += FRAME_SEC
+            total = len(self.utterance) * FRAME_SEC
+            if self.silence >= SILENCE_TO_END or total >= MAX_UTTERANCE:
+                self.speaking = False
+                self.voiced_run = 0
+                event = "speech_end"
+                if self.speech_time >= MIN_SPEECH:
+                    finished = np.concatenate(self.utterance)
+                self.utterance = []
+        return event, lvl, finished
+
+    def reset(self):
+        noise = self.noise
+        self.__init__()
+        self.noise = noise
+
+
+async def handle_client(ws):
+    print("Canlı oturum istemcisi bağlandı.", flush=True)
+    det = Detector()
+    pending = bytearray()
+    last_level_sent = 0.0
     try:
-        async for message in websocket:
-            if isinstance(message, bytes):
-                byte_buffer.extend(message)
-                while len(byte_buffer) >= 1024:
-                    chunk_bytes = bytes(byte_buffer[:1024])
-                    del byte_buffer[:1024]
-
-                    audio_int16 = np.frombuffer(chunk_bytes, dtype=np.int16)
-                    audio_float32 = audio_int16.astype(np.float32) / 32768.0
-                    rms = float(np.sqrt(np.mean(np.square(audio_float32))))
-                    speech_prob = detect_speech_prob(audio_float32, noise_floor=noise_floor)
-
-                    if speech_prob > VAD_THRESHOLD:
-                        if not is_speaking:
-                            is_speaking = True
-                            # Kelimenin ilk hecesini kaçırmamak için son 8 paketi (~250ms) başa ekle
-                            full_audio_buffer.extend(pre_roll_buffer)
-                            pre_roll_buffer.clear()
-                            await websocket.send(json.dumps({"type": "speech_start", "event": "speech_start"}))
-                        silence_frames = 0
-                        full_audio_buffer.append(audio_int16)
-                    else:
-                        if not is_speaking:
-                            noise_floor = 0.97 * noise_floor + 0.03 * min(rms, 0.025)
-                            pre_roll_buffer.append(audio_int16)
-                            if len(pre_roll_buffer) > 8:
-                                pre_roll_buffer.pop(0)
-                        else:
-                            full_audio_buffer.append(audio_int16)
-                            silence_frames += 1
-                            if silence_frames > max_silence_frames:
-                                is_speaking = False
-                                silence_frames = 0
-                                await websocket.send(json.dumps({"type": "speech_end", "event": "speech_end"}))
-
-                                combined = np.concatenate(full_audio_buffer, axis=0)
-                                full_audio_buffer = []
-
-                                loop = asyncio.get_running_loop()
-                                text = await loop.run_in_executor(None, send_pcm_to_stt_server, combined)
-                                if text and text.strip():
-                                    clean = text.strip()
-                                    print(f"Canlı Deşifre: {clean}")
-                                    await websocket.send(
-                                        json.dumps(
-                                            {
-                                                "type": "transcript",
-                                                "event": "transcription",
-                                                "text": clean,
-                                            },
-                                            ensure_ascii=False,
-                                        )
-                                    )
-            elif isinstance(message, str):
+        async for message in ws:
+            if isinstance(message, str):
                 try:
-                    data = json.loads(message)
-                    cmd = data.get("command")
-                    if cmd == "stop":
-                        break
-                    elif cmd == "reset":
-                        full_audio_buffer = []
-                        pre_roll_buffer = []
-                        is_speaking = False
-                        silence_frames = 0
-                        byte_buffer.clear()
-                except Exception:
-                    pass
+                    cmd = json.loads(message).get("command")
+                except Exception:  # noqa: BLE001
+                    cmd = message.strip()
+                if cmd == "stop":
+                    break
+                if cmd == "reset":
+                    det.reset()
+                    pending.clear()
+                continue
+
+            pending.extend(message)
+            while len(pending) >= FRAME * 2:
+                frame = np.frombuffer(bytes(pending[: FRAME * 2]), dtype=np.int16)
+                del pending[: FRAME * 2]
+                event, lvl, finished = det.feed(frame)
+
+                now = time.monotonic()
+                if now - last_level_sent >= 0.1:
+                    last_level_sent = now
+                    norm = float(min(1.0, lvl / max(det.threshold() * 4, 1e-6)))
+                    await ws.send(json.dumps({"type": "level", "level": round(norm, 3), "speaking": det.speaking}))
+
+                if event:
+                    await ws.send(json.dumps({"type": event, "event": event}))
+                if finished is not None:
+                    text = await asyncio.get_running_loop().run_in_executor(None, transcribe, finished)
+                    if text:
+                        print(f"Deşifre: {text}", flush=True)
+                        await ws.send(json.dumps(
+                            {"type": "transcript", "event": "transcription", "text": text}, ensure_ascii=False))
     except websockets.exceptions.ConnectionClosed:
         pass
 
 
 async def main():
-    port = 5051
-    print(f"FerIDE Voice Engine Daemon başlatıldı: ws://127.0.0.1:{port}")
-    async with websockets.serve(handle_client, "127.0.0.1", port):
+    port = int(__import__("os").environ.get("FERIDE_VAD_PORT", "5051"))
+    print(f"FerIDE canlı ses köprüsü: ws://127.0.0.1:{port}", flush=True)
+    async with websockets.serve(handle_client, "127.0.0.1", port, max_size=None):
         await asyncio.Future()
 
 

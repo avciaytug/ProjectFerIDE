@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'app_paths.dart';
 
-/// FerIDE Çapraz Platform Ses Sunucuları Yaşam Döngüsü Yöneticisi (v5.3.4)
+/// FerIDE Çapraz Platform Ses Sunucuları Yaşam Döngüsü Yöneticisi (v5.3.6)
 ///
 /// Linux, Windows ve macOS üzerinde gömülü/yerel faster-whisper STT (port 5052),
 /// Türkçe Piper / Sistem TTS (port 5050) ve WebSocket VAD (port 5051) servislerini
@@ -73,7 +73,12 @@ class ProcessManager {
     }
   }
 
+  /// Birim testlerinde gerçek ses sunucusu başlatılmaz (FERIDE_INTEGRATION=1 hariç).
+  static bool get _disabledInTests =>
+      Platform.environment.containsKey('FLUTTER_TEST') && Platform.environment['FERIDE_INTEGRATION'] != '1';
+
   Future<void> startAll() async {
+    if (_disabledInTests) return;
     if (_startingFuture != null) {
       return _startingFuture!;
     }
@@ -107,12 +112,23 @@ class ProcessManager {
     for (final s in servers) {
       final name = s['name'] as String;
       final port = s['port'] as int;
-      final pgrepPattern = s['pgrep'] as String;
 
       if (_processes.containsKey(name)) continue;
-      if (await _isPortOpen(port) || _alreadyRunning(pgrepPattern)) {
-        _log('$name: zaten çalışıyor (port=$port / $pgrepPattern), atlanıyor');
-        continue;
+      final scriptName0 = s['script'] as String;
+      final fp = _fingerprint(AppPaths.scriptPath(scriptName0));
+      // Karar yalnızca portu dinleyen sunucuya göre verilir; aynı adda başka
+      // bir süreç bulunması (pgrep) portun hizmet verdiği anlamına gelmez.
+      if (await _isPortOpen(port)) {
+        // Portta bir sunucu var. Aynı betik sürümünü çalıştırıyorsa kullan;
+        // eski bir sürümden (veya çökmüş bir oturumdan) kalmışsa yenile.
+        if (_runRecordMatches(name, fp)) {
+          _log('$name: güncel sunucu zaten çalışıyor (port=$port), yeniden kullanılıyor');
+          continue;
+        }
+        if (!await _replaceStaleServer(name, scriptName0, port)) {
+          _log('$name: portta eski bir sunucu var ve yenilenemedi (port=$port), mevcut olan kullanılacak');
+          continue;
+        }
       }
 
       final python = s['python'] as String;
@@ -130,6 +146,7 @@ class ProcessManager {
           environment: _serverEnv,
         );
         _processes[name] = proc;
+        _writeRunRecord(name, proc.pid, fp);
         _log('$name: başlatıldı (python=$python, script=$scriptFullPath, pid=${proc.pid})');
 
         final procLogFile = File(p.join(logDir.path, '${name}_process.log'));
@@ -157,6 +174,94 @@ class ProcessManager {
       } catch (e) {
         _log('$name: başlatılamadı ($e)');
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sunucu sürüm takibi: ~/.feride/run/<ad>.json = {pid, fp}. fp betiğin
+  // boyutu+değiştirilme zamanıdır; betik güncellenince eski süreç yenilenir.
+  // ---------------------------------------------------------------------------
+  static String _fingerprint(String path) {
+    try {
+      final st = File(path).statSync();
+      return '${st.size}-${st.modified.millisecondsSinceEpoch}';
+    } catch (_) {
+      return 'yok';
+    }
+  }
+
+  static File _runFile(String name) => File(p.join(AppPaths.ferideDataDir, 'run', '$name.json'));
+
+  void _writeRunRecord(String name, int pid, String fp) {
+    try {
+      final f = _runFile(name);
+      f.parent.createSync(recursive: true);
+      f.writeAsStringSync(dart_convert.jsonEncode({'pid': pid, 'fp': fp}));
+    } catch (_) {}
+  }
+
+  bool _runRecordMatches(String name, String fp) {
+    try {
+      final rec = dart_convert.jsonDecode(_runFile(name).readAsStringSync()) as Map;
+      return rec['fp'] == fp && _pidAlive((rec['pid'] as num).toInt());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static bool _pidAlive(int pid) {
+    if (Platform.isLinux) return Directory('/proc/$pid').existsSync();
+    if (Platform.isWindows) return true; // Windows'ta güvenli varsayım: dokunma
+    try {
+      return Process.runSync('kill', ['-0', '$pid']).exitCode == 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Yalnızca FerIDE ses betiklerini çalıştıran eski süreçleri sonlandırır.
+  Future<bool> _replaceStaleServer(String name, String script, int port) async {
+    if (Platform.isWindows) return false;
+    final pids = <int>{};
+    try {
+      final rec = dart_convert.jsonDecode(_runFile(name).readAsStringSync()) as Map;
+      pids.add((rec['pid'] as num).toInt());
+    } catch (_) {}
+    try {
+      final r = Process.runSync('pgrep', ['-f', 'scripts/$script']);
+      for (final l in r.stdout.toString().split('\n')) {
+        final v = int.tryParse(l.trim());
+        if (v != null) pids.add(v);
+      }
+    } catch (_) {}
+    var killed = false;
+    for (final target in pids) {
+      if (target == pid) continue; // kendi sürecimiz
+      if (!_isFerideScriptProcess(target, script)) continue;
+      _log('$name: eski sürüm sunucu yenileniyor (pid=$target)');
+      killed = Process.killPid(target, ProcessSignal.sigterm) || killed;
+    }
+    if (!killed) return false;
+    for (var i = 0; i < 30 && await _isPortOpen(port); i++) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    return !await _isPortOpen(port);
+  }
+
+  static bool _isFerideScriptProcess(int pid, String script) {
+    if (Platform.isLinux) {
+      try {
+        final cmd = File('/proc/$pid/cmdline').readAsStringSync();
+        return cmd.contains('scripts/$script');
+      } catch (_) {
+        return false;
+      }
+    }
+    try {
+      final r = Process.runSync('ps', ['-o', 'command=', '-p', '$pid']);
+      return r.stdout.toString().contains('scripts/$script');
+    } catch (_) {
+      return false;
     }
   }
 
@@ -213,25 +318,4 @@ class ProcessManager {
     _processes.clear();
   }
 
-  bool _alreadyRunning(String pattern) {
-    if (Platform.isWindows) {
-      try {
-        final r = Process.runSync('powershell', [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          "if (Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*$pattern*' }) { exit 0 } else { exit 1 }",
-        ]);
-        return r.exitCode == 0;
-      } catch (_) {
-        return false;
-      }
-    }
-    try {
-      final r = Process.runSync('pgrep', ['-f', pattern]);
-      return r.exitCode == 0;
-    } catch (_) {
-      return false;
-    }
-  }
 }

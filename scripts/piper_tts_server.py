@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE Piper TTS Sunucusu (v5.3.4 — Tamamen Lokal + Çoklu Platform)
+FerIDE Piper TTS Sunucusu (v5.3.6 — Tamamen Lokal + Çoklu Platform)
 ===================================================================
 Birincil: Piper TTS (`models/piper/tr_TR-fahrettin-medium.onnx`) — 100% çevrimdışı doğal Türkçe.
 Yedek: macOS `say`, Windows `System.Speech`, Linux `espeak-ng` (Piper çalışmazsa bile ses kesilmez).
