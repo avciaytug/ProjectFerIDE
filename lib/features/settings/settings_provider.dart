@@ -1,0 +1,276 @@
+import 'dart:io';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../aegis/aegis_service.dart';
+import '../../services/app_paths.dart';
+import '../../services/mcp_service.dart';
+
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  throw UnimplementedError();
+});
+
+class SettingsState {
+  final bool useGpuForStt;
+  final bool useGpuForTts;
+  final bool useGpuForLlm;
+  final String skillsPath;
+  final String chatHistoryPath;
+  final List<String> disabledSkills;
+  final int maxSteps;
+  final String? preferredModel;
+  final String backendEngine; // 'llama.cpp', 'ollama', 'vllm'
+  final String apiUrl;
+  final String customLlamaServerPath;
+  final String hfToken;
+
+  // MCP Ayarları
+  final bool mcpEnabled;
+  final String mcpConfigPath;
+  final bool mcpAutoDiscover;
+  final int mcpTimeoutSeconds;
+  final List<String> disabledMcpServers;
+
+  SettingsState({
+    required this.useGpuForStt,
+    required this.useGpuForTts,
+    required this.useGpuForLlm,
+    required this.skillsPath,
+    required this.chatHistoryPath,
+    required this.disabledSkills,
+    this.maxSteps = 100,
+    this.preferredModel,
+    this.backendEngine = 'llama.cpp',
+    this.apiUrl = 'http://127.0.0.1:8080/v1',
+    this.customLlamaServerPath = '',
+    this.hfToken = '',
+    this.mcpEnabled = true,
+    required this.mcpConfigPath,
+    this.mcpAutoDiscover = true,
+    this.mcpTimeoutSeconds = 60,
+    this.disabledMcpServers = const [],
+  });
+
+  bool isMcpServerEnabled(String serverName) {
+    if (!mcpEnabled) return false;
+    return !disabledMcpServers.contains(serverName);
+  }
+
+  SettingsState copyWith({
+    bool? useGpuForStt,
+    bool? useGpuForTts,
+    bool? useGpuForLlm,
+    String? skillsPath,
+    String? chatHistoryPath,
+    List<String>? disabledSkills,
+    int? maxSteps,
+    String? preferredModel,
+    String? backendEngine,
+    String? apiUrl,
+    String? customLlamaServerPath,
+    String? hfToken,
+    bool? mcpEnabled,
+    String? mcpConfigPath,
+    bool? mcpAutoDiscover,
+    int? mcpTimeoutSeconds,
+    List<String>? disabledMcpServers,
+  }) {
+    return SettingsState(
+      useGpuForStt: useGpuForStt ?? this.useGpuForStt,
+      useGpuForTts: useGpuForTts ?? this.useGpuForTts,
+      useGpuForLlm: useGpuForLlm ?? this.useGpuForLlm,
+      skillsPath: skillsPath ?? this.skillsPath,
+      chatHistoryPath: chatHistoryPath ?? this.chatHistoryPath,
+      disabledSkills: disabledSkills ?? this.disabledSkills,
+      maxSteps: maxSteps ?? this.maxSteps,
+      preferredModel: preferredModel ?? this.preferredModel,
+      backendEngine: backendEngine ?? this.backendEngine,
+      apiUrl: apiUrl ?? this.apiUrl,
+      customLlamaServerPath: customLlamaServerPath ?? this.customLlamaServerPath,
+      hfToken: hfToken ?? this.hfToken,
+      mcpEnabled: mcpEnabled ?? this.mcpEnabled,
+      mcpConfigPath: mcpConfigPath ?? this.mcpConfigPath,
+      mcpAutoDiscover: mcpAutoDiscover ?? this.mcpAutoDiscover,
+      mcpTimeoutSeconds: mcpTimeoutSeconds ?? this.mcpTimeoutSeconds,
+      disabledMcpServers: disabledMcpServers ?? this.disabledMcpServers,
+    );
+  }
+}
+
+class SettingsNotifier extends StateNotifier<SettingsState> {
+  final SharedPreferences prefs;
+
+  static String _defaultSkillsPath() {
+    final userSkills = p.join(AppPaths.ferideDataDir, 'skills');
+    if (Directory(userSkills).existsSync()) return userSkills;
+    final bundledSkills = p.join(AppPaths.appRoot, 'skills_data');
+    if (Directory(bundledSkills).existsSync()) return bundledSkills;
+    return userSkills;
+  }
+
+  static String _defaultChatsPath() {
+    final appChats = p.join(AppPaths.appRoot, 'Chats');
+    if (Directory(appChats).existsSync()) return appChats;
+    return p.join(AppPaths.ferideDataDir, 'Chats');
+  }
+
+  static String _defaultMcpPath() {
+    final userMcp = p.join(AppPaths.ferideDataDir, 'mcp_config.json');
+    if (File(userMcp).existsSync()) return userMcp;
+    final appMcp = p.join(AppPaths.appRoot, 'mcp_config.json');
+    if (File(appMcp).existsSync()) return appMcp;
+    return userMcp;
+  }
+
+  SettingsNotifier(this.prefs)
+      : super(SettingsState(
+          useGpuForStt: prefs.getBool('useGpuForStt') ?? true,
+          useGpuForTts: prefs.getBool('useGpuForTts') ?? true,
+          useGpuForLlm: prefs.getBool('useGpuForLlm') ?? true,
+          skillsPath: prefs.getString('skillsPath') ?? _defaultSkillsPath(),
+          chatHistoryPath: prefs.getString('chatHistoryPath') ?? _defaultChatsPath(),
+          disabledSkills: prefs.getStringList('disabledSkills') ?? [],
+          maxSteps: prefs.getInt('maxSteps') ?? 100,
+          preferredModel: prefs.getString('preferredModel'),
+          backendEngine: prefs.getString('backendEngine') ?? 'llama.cpp',
+          apiUrl: prefs.getString('apiUrl') ?? 'http://127.0.0.1:8080/v1',
+          customLlamaServerPath: prefs.getString('customLlamaServerPath') ?? '',
+          hfToken: prefs.getString('hfToken') ?? '',
+          mcpEnabled: prefs.getBool('mcpEnabled') ?? true,
+          mcpConfigPath: prefs.getString('mcpConfigPath') ?? _defaultMcpPath(),
+          mcpAutoDiscover: prefs.getBool('mcpAutoDiscover') ?? true,
+          mcpTimeoutSeconds: prefs.getInt('mcpTimeoutSeconds') ?? 60,
+          disabledMcpServers: prefs.getStringList('disabledMcpServers') ?? [],
+        )) {
+    try {
+      McpService.instance.loadConfig(state.mcpConfigPath);
+    } catch (_) {}
+  }
+
+  void setPreferredModel(String modelName) {
+    state = state.copyWith(preferredModel: modelName);
+    prefs.setString('preferredModel', modelName);
+  }
+
+  void setBackendEngine(String engine) {
+    state = state.copyWith(backendEngine: engine);
+    prefs.setString('backendEngine', engine);
+  }
+
+  void setApiUrl(String url) {
+    state = state.copyWith(apiUrl: url.trim());
+    prefs.setString('apiUrl', url.trim());
+  }
+
+  void setCustomLlamaServerPath(String path) {
+    state = state.copyWith(customLlamaServerPath: path.trim());
+    prefs.setString('customLlamaServerPath', path.trim());
+  }
+
+  void setHfToken(String token) {
+    state = state.copyWith(hfToken: token.trim());
+    prefs.setString('hfToken', token.trim());
+  }
+
+  void toggleSttGpu(bool value) {
+    state = state.copyWith(useGpuForStt: value);
+    prefs.setBool('useGpuForStt', value);
+  }
+
+  void toggleTtsGpu(bool value) {
+    state = state.copyWith(useGpuForTts: value);
+    prefs.setBool('useGpuForTts', value);
+  }
+
+  void toggleLlmGpu(bool value) {
+    state = state.copyWith(useGpuForLlm: value);
+    prefs.setBool('useGpuForLlm', value);
+  }
+
+  void toggleGpuForLlm(bool value) => toggleLlmGpu(value);
+
+  void setSkillsPath(String path) {
+    state = state.copyWith(skillsPath: path);
+    prefs.setString('skillsPath', path);
+    try {
+      AegisService.instance.importSkillsFromDirectory(path);
+    } catch (_) {}
+  }
+
+  void setChatHistoryPath(String path) {
+    state = state.copyWith(chatHistoryPath: path);
+    prefs.setString('chatHistoryPath', path);
+  }
+
+  void setMaxSteps(int steps) {
+    state = state.copyWith(maxSteps: steps);
+    prefs.setInt('maxSteps', steps);
+  }
+
+  void toggleSkill(String skillName, bool enabled) {
+    final list = List<String>.from(state.disabledSkills);
+    if (enabled) {
+      list.remove(skillName);
+    } else if (!list.contains(skillName)) {
+      list.add(skillName);
+    }
+    state = state.copyWith(disabledSkills: list);
+    prefs.setStringList('disabledSkills', list);
+  }
+
+  bool isSkillEnabled(String skillName) {
+    return !state.disabledSkills.contains(skillName);
+  }
+
+  void deleteSkill(String skillName) {
+    AegisService.instance.deleteSkillCompletely(skillName, customSkillsPath: state.skillsPath);
+    final list = List<String>.from(state.disabledSkills)..remove(skillName);
+    state = state.copyWith(disabledSkills: list);
+    prefs.setStringList('disabledSkills', list);
+  }
+
+  void toggleMcp(bool enabled) {
+    state = state.copyWith(mcpEnabled: enabled);
+    prefs.setBool('mcpEnabled', enabled);
+  }
+
+  void setMcpConfigPath(String path) {
+    state = state.copyWith(mcpConfigPath: path);
+    prefs.setString('mcpConfigPath', path);
+    try {
+      McpService.instance.loadConfig(path);
+    } catch (_) {}
+  }
+
+  void toggleMcpAutoDiscover(bool enabled) {
+    state = state.copyWith(mcpAutoDiscover: enabled);
+    prefs.setBool('mcpAutoDiscover', enabled);
+  }
+
+  void setMcpTimeoutSeconds(int seconds) {
+    state = state.copyWith(mcpTimeoutSeconds: seconds);
+    prefs.setInt('mcpTimeoutSeconds', seconds);
+  }
+
+  void toggleMcpServer(String serverName, bool enabled) {
+    final list = List<String>.from(state.disabledMcpServers);
+    if (enabled) {
+      list.remove(serverName);
+    } else if (!list.contains(serverName)) {
+      list.add(serverName);
+    }
+    state = state.copyWith(disabledMcpServers: list);
+    prefs.setStringList('disabledMcpServers', list);
+    McpService.instance.toggleServer(serverName, enabled);
+  }
+
+  bool isMcpServerEnabled(String serverName) {
+    if (!state.mcpEnabled) return false;
+    return !state.disabledMcpServers.contains(serverName);
+  }
+}
+
+final settingsProvider = StateNotifierProvider<SettingsNotifier, SettingsState>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return SettingsNotifier(prefs);
+});

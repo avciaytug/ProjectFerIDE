@@ -1,0 +1,12 @@
+# USBRelay8 (dcttech, 16c0:05df) -> hidraw14'e kullanici erisimi
+# Kurulum:  sudo cp udev_rule.rules /etc/udev/rules.d/99-usbreelay8.rules
+#           sudo udevadm control --reload && sudo udevadm trigger
+# Sonra karti cek-birak (veya 'sudo udevadm trigger').
+# Sonuc: /dev/hidrawXX artik 'plugdev' grubunda -> parola ile acilmaz.
+
+# 1) Cihaz kimligiyle esles
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="05df", MODE="0660", GROUP="plugdev"
+
+# 2) Alternatif: udev kurali uygulanirken kart hala tanimli degilse,
+#    adiyla da yakala (bazen ATTRS manufacturer/product gecikmeli dolar)
+SUBSYSTEM=="hidraw", ATTRS{product}=="USBRelay8", MODE="0660", GROUP="plugdev"

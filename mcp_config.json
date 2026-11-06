@@ -1,0 +1,64 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "~"
+      ],
+      "description": "Yerel dosya okuma, yazma, dizin listeleme ve dosya arama MCP sunucusu.",
+      "disabled": false
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ],
+      "description": "Web sayfalarını hızlıca indirip markdown formatında çeken MCP sunucusu.",
+      "disabled": false
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "description": "Kalıcı varlık ve ilişkisel bilgi grafiği hafıza sunucusu.",
+      "disabled": false
+    },
+    "sqlite": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-sqlite",
+        "--db-path",
+        "~/.feride/feride_knowledge.db"
+      ],
+      "description": "Yerel SQLite veritabanı sorgulama ve SQL analizi.",
+      "disabled": false
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      },
+      "description": "GitHub depoları, commit ve issue yönetimi.",
+      "disabled": true
+    },
+    "puppeteer": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
+      ],
+      "description": "Başsız Chromium tarayıcı ile web otomasyonu ve gezinme.",
+      "disabled": true
+    }
+  },
+  "updatedAt": "2026-11-02T15:05:00Z",
+  "ferideVersion": "5.3.4"
+}

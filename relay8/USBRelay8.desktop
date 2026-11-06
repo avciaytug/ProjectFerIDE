@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=USBRelay8 Kontrol
+Comment=8 kanalli USB roleyi ac/kapa yap
+Exec=python3 %h/relay8.py gui
+Path=%h
+Icon=preferences-system-power-management
+Terminal=false
+Categories=System;HardwareSettings;
+StartupNotify=true

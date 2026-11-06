@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=FerIDE Beta v5.3.4
+GenericName=Otonom Yerel Yapay Zeka IDE
+Comment=Otonom Yerel Yapay Zeka Asistanı ve Evrensel Dosya Stüdyosu
+Exec=sh -c 'DIR="$(cd "$(dirname "$1")" && pwd)" && exec "$DIR/run.sh"' -- %k
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;IDE;Utility;
+StartupNotify=true
+StartupWMClass=feride_v5_2
