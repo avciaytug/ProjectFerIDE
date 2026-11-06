@@ -36,6 +36,9 @@ class SettingsState {
   final PermissionMode permissionMode;
   final String workspaceDir;
 
+  /// "Feride" uyandırma kelimesiyle eller serbest kullanım (mikrofon arka planda dinler).
+  final bool wakeWordEnabled;
+
   /// Ajanın göreceli yolları çözdüğü ve komutları çalıştırdığı dizin.
   String get effectiveWorkspaceDir {
     final ws = workspaceDir.trim();
@@ -63,6 +66,7 @@ class SettingsState {
     this.disabledMcpServers = const [],
     this.permissionMode = PermissionMode.autoEdit,
     this.workspaceDir = '',
+    this.wakeWordEnabled = false,
   });
 
   bool isMcpServerEnabled(String serverName) {
@@ -90,6 +94,7 @@ class SettingsState {
     List<String>? disabledMcpServers,
     PermissionMode? permissionMode,
     String? workspaceDir,
+    bool? wakeWordEnabled,
   }) {
     return SettingsState(
       useGpuForStt: useGpuForStt ?? this.useGpuForStt,
@@ -111,6 +116,7 @@ class SettingsState {
       disabledMcpServers: disabledMcpServers ?? this.disabledMcpServers,
       permissionMode: permissionMode ?? this.permissionMode,
       workspaceDir: workspaceDir ?? this.workspaceDir,
+      wakeWordEnabled: wakeWordEnabled ?? this.wakeWordEnabled,
     );
   }
 }
@@ -161,6 +167,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
           disabledMcpServers: prefs.getStringList('disabledMcpServers') ?? [],
           permissionMode: permissionModeFromName(prefs.getString('permissionMode')),
           workspaceDir: prefs.getString('workspaceDir') ?? '',
+          wakeWordEnabled: prefs.getBool('wakeWordEnabled') ?? false,
         )) {
     try {
       McpService.instance.loadConfig(state.mcpConfigPath);
@@ -175,6 +182,11 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   void setPermissionMode(PermissionMode mode) {
     state = state.copyWith(permissionMode: mode);
     prefs.setString('permissionMode', mode.name);
+  }
+
+  void setWakeWordEnabled(bool v) {
+    state = state.copyWith(wakeWordEnabled: v);
+    prefs.setBool('wakeWordEnabled', v);
   }
 
   void setWorkspaceDir(String dir) {

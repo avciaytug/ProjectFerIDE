@@ -953,7 +953,9 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
                   onTap: () async {
                     final voiceState = ref.read(voiceManagerProvider);
                     if (voiceState.isProcessingSTT) return;
-                    if (voiceState.isRecording) {
+                    // Yalnızca bu düğmenin başlattığı kaydı durdur; arka plandaki
+                    // uyandırma dinleyicisi çalışıyorsa yeni bir sohbet kaydı başlat.
+                    if (voiceState.isRecording && voiceState.micOwner == 'chat') {
                       final transcript = await ref.read(voiceManagerProvider.notifier).stopRecording();
                       final updatedVoice = ref.read(voiceManagerProvider);
                       if (transcript != null && transcript.trim().isNotEmpty) {

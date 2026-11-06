@@ -31,7 +31,7 @@ SAMPLE_RATE = 16000
 FRAME = 512                       # 32 ms
 FRAME_SEC = FRAME / SAMPLE_RATE
 SILENCE_TO_END = 0.9              # bu kadar sessizlik konuşmayı bitirir (sn)
-MIN_SPEECH = 0.30                 # bundan kısa sesler (tık, öksürük) yok sayılır
+MIN_SPEECH = 0.12                 # bundan kısa sesler (tık) yok sayılır; "evet" gibi tek kelimeler geçer
 MAX_UTTERANCE = 25.0              # en uzun tek konuşma (sn) — asla takılı kalmaz
 PRE_ROLL_FRAMES = 10              # ilk heceyi kaçırmamak için ~320 ms geri sarma
 START_FRAMES = 3                  # konuşma sayılması için art arda çerçeve
@@ -61,6 +61,11 @@ def transcribe(pcm_int16: np.ndarray) -> str:
     peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
     if 0.0 < peak < 0.3:  # kısık mikrofonu güvenle yükselt
         audio = audio * min(8.0, 0.5 / peak)
+    # Whisper çok kısa kayıtlarda kararsızdır: en az 1,2 sn olacak şekilde sessizlik ekle.
+    min_len = int(SAMPLE_RATE * 1.2)
+    if len(audio) < min_len:
+        pad = (min_len - len(audio)) // 2
+        audio = np.pad(audio, (pad, min_len - len(audio) - pad))
     pcm = (np.clip(audio, -1, 1) * 32767).astype(np.int16)
 
     buf = io.BytesIO()

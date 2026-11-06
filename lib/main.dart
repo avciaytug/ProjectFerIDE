@@ -15,6 +15,7 @@ import 'services/pty_sandbox.dart';
 import 'services/mcp_service.dart';
 import 'agent/permissions.dart';
 import 'features/chat/approval_listener.dart';
+import 'features/live/wake_word.dart';
 import 'package:window_manager/window_manager.dart';
 
 void main() async {
@@ -133,6 +134,7 @@ class _FerIDEAppState extends ConsumerState<FerIDEApp> with WindowListener {
     final themeMode = ref.watch(themeModeProvider);
 
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'FerIDE Beta v5.3.6',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,

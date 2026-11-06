@@ -222,6 +222,10 @@ HALLUCINATION_RE = re.compile(
 )
 
 
+# Whisper'a bağlam ipucu: asistanın adını doğru yazması için.
+INITIAL_PROMPT = "Bu Türkçe bir konuşmadır. Feride bir yapay zeka asistanıdır. Feride, evet, hayır, tamam."
+
+
 def remove_dc(x: np.ndarray, win: int = 801) -> np.ndarray:
     """DC kaymasını ve ~20 Hz altı uğultuyu kaldırır.
 
@@ -264,7 +268,7 @@ def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr") -> str:
             language=lang if lang else "tr",
             task="transcribe",
             condition_on_previous_text=False,
-            initial_prompt="Bu Türkçe bir konuşmadır.",
+            initial_prompt=INITIAL_PROMPT,
         )
         for segment in result.get("segments", []):
             if segment.get("no_speech_prob", 0.0) < 0.65:
@@ -278,7 +282,7 @@ def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr") -> str:
                 vad_filter=True,
                 vad_parameters={"min_silence_duration_ms": 350},
                 condition_on_previous_text=False,
-                initial_prompt="Bu Türkçe bir konuşmadır.",
+                initial_prompt=INITIAL_PROMPT,
             )
             seg_list = list(segments)
         except Exception as vad_err:
@@ -289,7 +293,7 @@ def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr") -> str:
                 beam_size=3,
                 vad_filter=False,
                 condition_on_previous_text=False,
-                initial_prompt="Bu Türkçe bir konuşmadır.",
+                initial_prompt=INITIAL_PROMPT,
             )
             seg_list = list(segments)
 

@@ -28,6 +28,10 @@ class VoiceState {
   final double micLevel;
   final bool userSpeaking;
 
+  /// Mikrofonu şu an kim kullanıyor ('chat' | 'live' | 'wake') ve son deşifre kimin için.
+  final String? micOwner;
+  final String? transcriptOwner;
+
   VoiceState({
     this.isRecording = false,
     this.isProcessingSTT = false,
@@ -39,6 +43,8 @@ class VoiceState {
     this.pendingQueueCount = 0,
     this.micLevel = 0,
     this.userSpeaking = false,
+    this.micOwner,
+    this.transcriptOwner,
   });
 
   VoiceState copyWith({
@@ -52,6 +58,8 @@ class VoiceState {
     int? pendingQueueCount,
     double? micLevel,
     bool? userSpeaking,
+    String? micOwner,
+    String? transcriptOwner,
     bool clearTranscript = false,
     bool clearError = false,
   }) {
@@ -66,6 +74,8 @@ class VoiceState {
       pendingQueueCount: pendingQueueCount ?? this.pendingQueueCount,
       micLevel: micLevel ?? this.micLevel,
       userSpeaking: userSpeaking ?? this.userSpeaking,
+      micOwner: micOwner ?? this.micOwner,
+      transcriptOwner: transcriptOwner ?? this.transcriptOwner,
     );
   }
 }
@@ -144,7 +154,13 @@ class VoiceManager extends StateNotifier<VoiceState> {
     return false;
   }
 
-  Future<void> startRecording({bool autoStop = false, bool isLiveSession = false}) async {
+  Future<void> startRecording({bool autoStop = false, bool isLiveSession = false, String? owner}) async {
+    final newOwner = owner ?? (isLiveSession ? 'live' : 'chat');
+    // Mikrofon başka bir kullanıcıdaysa (ör. arka plandaki uyandırma dinleyicisi)
+    // önce onu serbest bırak; aynı kaydedicide iki akış açılmasın.
+    if (state.isRecording) {
+      await stopRecording(fromLiveSession: state.isLiveSession);
+    }
     try {
       // Ses sunucularını arka planda hemen uyandır
       unawaited(ProcessManager.instance.startAll());
@@ -184,6 +200,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
       state = state.copyWith(
         isRecording: true,
         isLiveSession: isLiveSession,
+        micOwner: newOwner,
         clearError: true,
         clearTranscript: true,
       );
@@ -247,6 +264,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
                   isProcessingSTT: false,
                   userSpeaking: false,
                   micLevel: 0,
+                  transcriptOwner: state.micOwner,
                   lastTranscript: text,
                   transcriptSeq: state.transcriptSeq + 1,
                   clearError: true,
@@ -405,6 +423,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
         state = state.copyWith(
           isProcessingSTT: false,
           isLiveSession: false,
+          transcriptOwner: 'chat',
           lastTranscript: text,
           transcriptSeq: state.transcriptSeq + 1,
           clearError: true,

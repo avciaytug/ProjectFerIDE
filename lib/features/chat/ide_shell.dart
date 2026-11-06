@@ -10,6 +10,7 @@ import 'state.dart';
 import '../../agent/permissions.dart';
 import '../../theme/ide_palette.dart';
 import '../live/live_session_view.dart';
+import '../live/wake_word.dart';
 import 'dart:async';
 import 'dart:io' show Directory, File, Platform;
 import 'package:dio/dio.dart';
@@ -32,6 +33,9 @@ class _IdeShellState extends ConsumerState<IdeShell> {
   @override
   void initState() {
     super.initState();
+    // "Feride" denildiğinde sesli asistanı aç ve komutu doğrudan işle.
+    ref.read(wakeWordProvider.notifier).onWake =
+        (command) => openVoiceAssistant(null, autoStart: true, initialCommand: command);
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await ref.read(selectedModelProvider.notifier).syncWithRunningServer();
@@ -207,6 +211,8 @@ class _IdeShellState extends ConsumerState<IdeShell> {
                 ),
               ),
               const SizedBox(width: 12),
+              const _WakeChip(),
+              const SizedBox(width: 8),
               const _PermissionChip(),
               const SizedBox(width: 16),
               // Thinking Mode Switch
@@ -3299,20 +3305,6 @@ class FloatingDownloadBar extends ConsumerWidget {
 /// Uygulama sürümü (başlık, pencere adı ve hakkında bilgisi tek yerden).
 const String kFerideVersion = 'v5.3.6';
 
-/// Sesli asistan penceresini açar (başlıktaki düğme ve Ctrl+M).
-void openVoiceAssistant(BuildContext context) {
-  showDialog(
-    context: context,
-    barrierColor: Colors.black.withValues(alpha: 0.45),
-    builder: (_) => const Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: EdgeInsets.all(24),
-      child: LiveSessionView(),
-    ),
-  );
-}
-
 /// Başlıktaki izin modu rozeti: güvenlik seviyesini her an görünür kılar.
 class _PermissionChip extends ConsumerWidget {
   const _PermissionChip();
@@ -3350,6 +3342,48 @@ class _PermissionChip extends ConsumerWidget {
           const SizedBox(width: 6),
           Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
         ]),
+      ),
+    );
+  }
+}
+
+
+/// Başlıktaki "Feride'yi dinle" anahtarı: açıkken "Feride, ..." diye seslenmek yeterli.
+class _WakeChip extends ConsumerWidget {
+  const _WakeChip();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    WakeState wake;
+    try {
+      wake = ref.watch(wakeWordProvider);
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    final on = wake.enabled;
+    final color = on ? const Color(0xFF22C55E) : IdePalette.textTertiary;
+    return Tooltip(
+      message: on
+          ? 'Eller serbest açık: "Feride, ..." diye seslenin. Kapatmak için tıklayın.\n'
+              'Ses yalnızca bu bilgisayarda işlenir.'
+          : 'Eller serbest: "Feride" uyandırma kelimesini dinlemeyi aç',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => ref.read(wakeWordProvider.notifier).setEnabled(!on),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: on ? 0.12 : 0.06),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(on ? Icons.hearing_rounded : Icons.hearing_disabled_rounded, size: 15, color: color),
+            const SizedBox(width: 6),
+            Text(on ? (wake.listening ? '"Feride" dinleniyor' : 'Eller serbest') : 'Eller serbest',
+                style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+          ]),
+        ),
       ),
     );
   }

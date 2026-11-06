@@ -12,13 +12,20 @@ import '../../services/sentence_chunker.dart';
 import '../../services/voice_manager.dart';
 import '../../theme/ide_palette.dart';
 import '../chat/state.dart';
+import 'wake_word.dart';
 
 /// Sesli asistanın anlık durumu.
 enum _Phase { idle, listening, hearing, transcribing, thinking, speaking }
 
 /// FerIDE sesli asistan ekranı: dinle → anla → düşün/yap → konuş → tekrar dinle.
 class LiveSessionView extends ConsumerStatefulWidget {
-  const LiveSessionView({super.key});
+  /// Açılır açılmaz oturumu başlat (uyandırma kelimesiyle açıldığında).
+  final bool autoStart;
+
+  /// Uyandırma cümlesinde "Feride"den sonra söylenen komut (varsa doğrudan işlenir).
+  final String? initialCommand;
+
+  const LiveSessionView({super.key, this.autoStart = false, this.initialCommand});
 
   @override
   ConsumerState<LiveSessionView> createState() => _LiveSessionViewState();
@@ -39,6 +46,12 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
   StreamSubscription<ApprovalRequest>? _approvalSub;
   ProviderSubscription<VoiceState>? _voiceSub;
 
+  /// Sesle yanıt beklenen onay isteği.
+  ApprovalRequest? _pendingApproval;
+
+  /// dispose sırasında ağaca erişmemek için baştan saklanır.
+  late final StateController<bool> _dialogOpen;
+
   @override
   void initState() {
     super.initState();
@@ -46,19 +59,43 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
     // Ses sunucularını önceden ısıt: ilk konuşmada bekleme olmasın.
     unawaited(ProcessManager.instance.startAll());
     _voiceSub = ref.listenManual<VoiceState>(voiceManagerProvider, _onVoiceChanged);
+    // Pencere açıkken arka plandaki uyandırma dinleyicisi mikrofonu bıraksın.
+    _dialogOpen = ref.read(voiceDialogOpenProvider.notifier);
+    Future.microtask(() {
+      if (mounted) _dialogOpen.state = true;
+    });
+    if (widget.autoStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final cmd = widget.initialCommand?.trim() ?? '';
+        _start(listenNow: cmd.isEmpty);
+        if (cmd.isNotEmpty) {
+          unawaited(_handleUtterance(cmd));
+        } else {
+          _say('Efendim, dinliyorum.');
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
     if (_active) _stop(fromDispose: true);
     _voiceSub?.close();
+    // dispose sırasında provider durumu doğrudan değiştirilemez; bir sonraki tura bırak.
+    final open = _dialogOpen;
+    Future.microtask(() {
+      try {
+        open.state = false;
+      } catch (_) {}
+    });
     _anim.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
   // ------------------------------------------------------------- yaşam döngüsü
-  void _start() {
+  void _start({bool listenNow = true}) {
     // Oturumu ÖNCEDEN oluştur: motor olayları baştan doğru oturuma bağlanır
     // (eskiden ilk cümlede oturum kimliği değiştiği için olaylar kaçabiliyordu).
     var session = ref.read(activeSessionProvider);
@@ -70,11 +107,49 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
     }
     _sessionId = session.id;
     _eventsSub = ref.read(agentEngineProvider(_sessionId)).events.listen(_onAgentEvent);
-    _approvalSub = ApprovalBroker.instance.requests.listen((_) {
-      if (_active) _say('Bu işlem için ekranda onayınız gerekiyor.');
-    });
+    _approvalSub = ApprovalBroker.instance.requests.listen(_onApprovalRequest);
     setState(() => _active = true);
-    _listen();
+    if (listenNow) _listen();
+  }
+
+  /// Onay isteğini sesli sorar; yanıt "evet/hayır" ile ya da ekrandan verilebilir.
+  void _onApprovalRequest(ApprovalRequest req) {
+    if (!_active) return;
+    _pendingApproval = req;
+    req.future.then((_) {
+      if (identical(_pendingApproval, req)) {
+        _pendingApproval = null;
+        if (mounted) setState(() {});
+      }
+    });
+    final what = switch (req.risk) {
+      ToolRisk.execute => 'bir komut çalıştırmam',
+      ToolRisk.write => 'bir dosyayı değiştirmem',
+      ToolRisk.network => 'internete bağlanmam',
+      ToolRisk.read => 'bir işlem yapmam',
+    };
+    _add(_Entry.activity('Onay bekleniyor: ${req.summary.split('\n').first}'));
+    _say('Bunun için $what gerekiyor. Onaylıyor musunuz? Evet ya da hayır diyebilirsiniz.');
+    setState(() {});
+  }
+
+  void _answerApproval(String text) {
+    final req = _pendingApproval;
+    if (req == null) return;
+    _add(_Entry.user(text));
+    switch (VoiceIntent.classifyYesNo(text)) {
+      case YesNo.yes:
+        _pendingApproval = null;
+        req.resolve(true);
+        _say('Tamam, yapıyorum.');
+      case YesNo.no:
+        _pendingApproval = null;
+        req.resolve(false);
+        _say('Peki, yapmıyorum.');
+      case null:
+        _say('Anlayamadım. Evet ya da hayır der misiniz?');
+    }
+    setState(() {});
   }
 
   void _stop({bool fromDispose = false}) {
@@ -94,7 +169,8 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
   }
 
   void _listen() {
-    if (!_active || _engineBusy || !mounted) return;
+    if (!_active || !mounted) return;
+    if (_engineBusy && _pendingApproval == null) return;
     final vs = ref.read(voiceManagerProvider);
     if (vs.isRecording || vs.isSpeaking || vs.pendingQueueCount > 0) return;
     ref.read(voiceManagerProvider.notifier).startRecording(autoStop: true, isLiveSession: true);
@@ -114,9 +190,15 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
   // ------------------------------------------------------------------ olaylar
   void _onVoiceChanged(VoiceState? prev, VoiceState next) {
     if (!_active) return;
-    final isNew = next.transcriptSeq > (prev?.transcriptSeq ?? 0) && (next.lastTranscript?.isNotEmpty ?? false);
+    final isNew = next.transcriptSeq > (prev?.transcriptSeq ?? 0) &&
+        next.transcriptOwner == 'live' &&
+        (next.lastTranscript?.isNotEmpty ?? false);
     if (isNew) {
-      unawaited(_handleUtterance(next.lastTranscript!));
+      if (_pendingApproval != null) {
+        _answerApproval(next.lastTranscript!);
+      } else if (!_engineBusy) {
+        unawaited(_handleUtterance(next.lastTranscript!));
+      }
       return;
     }
     // Konuşma bitti → tekrar dinle (kesintisiz döngü)
@@ -241,6 +323,7 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
   _Phase _phase(VoiceState vs) {
     if (!_active) return _Phase.idle;
     if (vs.isSpeaking) return _Phase.speaking;
+    if (_pendingApproval != null && vs.isRecording) return vs.userSpeaking ? _Phase.hearing : _Phase.listening;
     if (_engineBusy) return _Phase.thinking;
     if (vs.isProcessingSTT) return _Phase.transcribing;
     if (vs.userSpeaking) return _Phase.hearing;
@@ -268,6 +351,7 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
 
     final (title, hint) = switch (phase) {
       _Phase.idle => ('Sesli asistan hazır', 'Başlamak için mikrofona dokunun'),
+      _Phase.listening when _pendingApproval != null => ('Onayınızı bekliyorum', '"Evet" ya da "hayır" deyin'),
       _Phase.listening => ('Dinliyorum', 'Konuşmaya başlayabilirsiniz'),
       _Phase.hearing => ('Sizi duyuyorum', 'Sustuğunuzda yanıtlayacağım'),
       _Phase.transcribing => ('Anlıyorum', 'Söyledikleriniz yazıya çevriliyor'),
@@ -568,4 +652,23 @@ class _Entry {
   factory _Entry.feride(String t) => _Entry(_Kind.feride, t);
   factory _Entry.activity(String t) => _Entry(_Kind.activity, t);
   factory _Entry.error(String t) => _Entry(_Kind.error, t);
+}
+
+
+/// Sesli asistan penceresini açar (başlıktaki düğme, Ctrl+M ve "Feride" uyandırma kelimesi).
+Future<void> openVoiceAssistant(BuildContext? context, {bool autoStart = false, String? initialCommand}) async {
+  final ctx = context ?? rootNavigatorKey.currentContext;
+  if (ctx == null) return;
+  final container = ProviderScope.containerOf(ctx, listen: false);
+  if (container.read(voiceDialogOpenProvider)) return; // zaten açık
+  await showDialog(
+    context: ctx,
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    builder: (_) => Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.all(24),
+      child: LiveSessionView(autoStart: autoStart, initialCommand: initialCommand),
+    ),
+  );
 }

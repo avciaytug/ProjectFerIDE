@@ -22,6 +22,13 @@ Ek iyileştirmeler:
 - Testler artık geliştirme makinesindeki gerçek ses sunucularını başlatıp öldürmüyor (`FERIDE_INTEGRATION=1` ile isteğe bağlı).
 - Native Linux derlemesi (cmake/clang) başarıyla yapıldı.
 
+### v5.3.6 eklemeleri: eller serbest ve sesle onay
+- **"Feride" uyandırma kelimesi.** Başlıktaki **Eller serbest** rozetiyle açılır. Açıkken "Feride, …" demek yeterli: sesli asistan kendiliğinden açılır ve komutu doğrudan işler. Yalnızca "Feride" denirse "Efendim, dinliyorum" diye yanıt verir. Whisper'ın duyma hatalarını ("Ferit", "Felida", "Feride'ye") tolere eder; isim cümlenin başında değilse uyanmaz. Mikrofon yalnızca bu mod açıkken dinlenir ve ses bilgisayardan dışarı çıkmaz.
+- **Sesle onay.** Bir işlem onay gerektirdiğinde Feride ne yapmak istediğini söyleyip sorar: "Evet / tamam / onaylıyorum" ya da "hayır / iptal / vazgeç". "Hayır, yapma" gibi ifadelerde olumsuzluk önceliklidir. Ekrandaki onay penceresi de aynı anda geçerlidir.
+- **Mikrofon paylaşımı.** Sohbet mikrofonu, sesli asistan ve uyandırma dinleyicisi aynı kaydediciyi çakışmadan paylaşıyor; her deşifre sahibine teslim ediliyor.
+- **Kısa sözcükler.** "Evet", "Feride" gibi kısa sözcükler artık atılmıyor: VAD eşiği düşürüldü, kısa kayıtlar Whisper için sessizlikle dolduruluyor, Whisper'a "Feride" adı ipucu olarak veriliyor.
+- **Testler.** Uyandırma ve onay yorumlayıcı için birim testleri eklendi. Gerçek TTS → DC kaymalı mikrofon → VAD → STT → niyet hattı için entegrasyon testi eklendi (`FERIDE_INTEGRATION=1`).
+
 ---
 
 
