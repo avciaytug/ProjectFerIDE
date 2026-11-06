@@ -1,6 +1,5 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
@@ -46,54 +45,21 @@ final localizationProvider = Provider<Map<String, Map<String, String>>>((ref) {
 });
 
 // 2.5 API Config State
-// Web'de (Docker) göreceli /v1 → nginx proxy'si konteyner içi beyne yönlendirir.
-// Native'de 127.0.0.1:8080 (yerel llama-server) veya Ayarlar'daki özel API adresi.
-final _isWebApi = kIsWeb;
-final apiUrlProvider = StateProvider<String>((ref) {
-  if (_isWebApi) return '/v1';
-  try {
-    final saved = ref.watch(settingsProvider.select((s) => s.apiUrl));
-    if (saved.trim().isNotEmpty) return saved.trim();
-  } catch (_) {}
-  return 'http://127.0.0.1:8080/v1';
-});
-
-/// Sesli (canlı) oturumda kullanılan HIZLI modelin API adresi.
-final liveApiUrlProvider =
-    StateProvider<String>((ref) => _isWebApi ? '/v1' : 'http://127.0.0.1:11434/v1');
-
-/// Sesli oturumda STT websocket adresi (mevcut sabit provider'a taşındı).
-final liveSttWsUrlProvider =
-    StateProvider<String>((ref) => 'ws://127.0.0.1:5052/ws');
-
-// ── Web (Docker) motor eşlemesi ─────────────────────────────────────────────
-// Beyin konteyneri iki llama-server barındırır; nginx GUI'ye proxy açar:
-//   Gemma 12B → /v1       (8081, hızlı)
-//   Qwen  27B → /v1-qwen  (8082, güçlü)
-const _webGemmaModel = '/models/gemma-4-12b-it-Q4_K_M.gguf';
-const _webQwenModel =
-    '/models/ThinkingCap-Qwen3.8-27B-abliterated-UD-Q4_K_XL.gguf';
-
-/// Seçilen model etiketini gerçek GGUF model ID'sine çevirir.
-/// Web'de "Gemma 12B (...)" → Gemma GGUF, "Qwen 27B (...)" → Qwen GGUF;
-/// native'de (veya GGUF path/ada) olduğu gibi döner.
-String modelForLabel(String label) {
-  if (!_isWebApi) return label;
-  if (label.contains('Qwen')) return _webQwenModel;
-  return _webGemmaModel;
-}
-
-/// Seçilen model etiketine göre taban API URL'si.
-/// Web'de "Qwen" → /v1-qwen, aksi → /v1. Native'de özel URL veya 127.0.0.1:8080/v1.
-String baseUrlForModel(String label, {String? customApiUrl}) {
-  if (!_isWebApi) {
-    if (customApiUrl != null && customApiUrl.trim().isNotEmpty) {
-      return customApiUrl.trim();
-    }
-    return 'http://127.0.0.1:8080/v1';
+/// Ana model sunucusunun OpenAI uyumlu adresi (llama-server, Ollama, LM Studio...).
+/// Hem yazılı sohbet hem sesli canlı oturum aynı sunucuyu kullanır.
+final apiUrlProvider = Provider<String>((ref) {
+  const llamaDefault = 'http://127.0.0.1:8080/v1';
+  final saved = ref.watch(settingsProvider.select((s) => s.apiUrl)).trim();
+  final engine = ref.watch(settingsProvider.select((s) => s.backendEngine));
+  // Özel bir adres girilmediyse seçilen motorun varsayılan portu kullanılır
+  // (eskiden Ollama/vLLM seçilse bile ajan 8080'e bağlanmaya çalışıyordu).
+  if (saved.isEmpty || saved == llamaDefault) {
+    if (engine == 'ollama') return 'http://127.0.0.1:11434/v1';
+    if (engine == 'vllm') return 'http://127.0.0.1:8000/v1';
+    return llamaDefault;
   }
-  return label.contains('Qwen') ? '/v1-qwen' : '/v1';
-}
+  return saved;
+});
 
 /// Yardımcı: mmproj, vocab, imatrix veya mtp draft dosyalarını ana model listesinden ayıklar
 bool isAuxiliaryGgufFile(String fileName) {
@@ -105,14 +71,8 @@ bool isAuxiliaryGgufFile(String fileName) {
       lower.contains('/mtp-');
 }
 
-// 2.6 Autonomous Mode State
-final autonomousModeProvider = StateProvider<bool>((ref) => false);
-// 2.8 Plan Mode State
+// 2.8 Plan Mode State (yalnızca okuma araçları + plan çıkarma)
 final planModeProvider = StateProvider<bool>((ref) => false);
-
-// 2.9 Permission Mode (Ask / AutoEdit / FullAuto)
-enum PermissionMode { ask, autoEdit, fullAuto }
-final permissionModeProvider = StateProvider<PermissionMode>((ref) => PermissionMode.autoEdit);
 
 // 2.10 Live Todos State
 final activeTodosProvider = StateProvider<List<TodoItem>>((ref) => []);
@@ -136,9 +96,6 @@ class MemoryInfo {
 }
 
 MemoryInfo _detectLocalMemoryInfo() {
-  if (_isWebApi) {
-    return MemoryInfo('Bulut / Konteyner', 'Yerel Sunucu', false);
-  }
   String ramLabel = 'Sistem Belleği';
   String gpuLabel = Platform.isMacOS ? 'Apple Silicon / Metal' : 'Yerel GPU / CPU';
   bool unified = Platform.isMacOS;
@@ -221,10 +178,7 @@ final memoryInfoProvider = StateProvider<MemoryInfo>((ref) {
 final thinkingModeProvider = StateProvider<bool>((ref) => false);
 
 // 4. Model State (Dynamic Scanning)
-List<String> getModelScanDirs() {
-  if (_isWebApi) return const [];
-  return AppPaths.modelScanDirs;
-}
+List<String> getModelScanDirs() => AppPaths.modelScanDirs;
 
 /// Bir GGUF dosya adının bölünmüş (split) olup olmadığını ve kaç parçadan
 /// oluştuğunu ayıklar. Tek parça GGUF'lar null döner.
@@ -270,15 +224,6 @@ String _ggufDisplayName(String name) {
 final availableModelsProvider = FutureProvider<List<String>>((ref) async {
   List<String> models = [];
   try {
-    // Web'de (Docker) beyin konteyneri iki modeli barındırır:
-    //   /v1      → Gemma 12B  (hızlı, varsayılan)
-    //   /v1-qwen → Qwen 27B   (güçlü)
-    // Yerel disk taraması web'de boş kalır → iki motoru da listele.
-    if (_isWebApi) {
-      models.add('Gemma 12B  (/v1  -  hızlı)');
-      models.add('Qwen 27B  (/v1-qwen  -  güçlü)');
-      return models;
-    }
     final dirsToScan = getModelScanDirs();
 
     for (var dirPath in dirsToScan) {
@@ -318,15 +263,9 @@ class SelectedModelNotifier extends Notifier<String> {
     } catch (_) {}
     final initial = (preferred != null && preferred.isNotEmpty)
         ? preferred
-        : (_isWebApi
-            ? 'Gemma 12B  (/v1  -  hızlı)'
-            : 'Model İndirin (Ayarlar > Model Merkezi)');
+        : 'Model İndirin (Ayarlar > Model Merkezi)';
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
-      if (_isWebApi) {
-        Future.microtask(() => syncWithRunningServer('/v1'));
-      } else {
-        Future.microtask(() => syncWithRunningServer(ref.read(apiUrlProvider)));
-      }
+      Future.microtask(() => syncWithRunningServer(ref.read(apiUrlProvider)));
     }
     return initial;
   }
@@ -356,22 +295,15 @@ class SelectedModelNotifier extends Notifier<String> {
   Future<void> syncWithRunningServer([String? apiUrl]) async {
     final runningModel = await fetchRunningServerModel(apiUrl);
     if (runningModel != null && runningModel.isNotEmpty) {
-      if (_isWebApi) {
-        if (!state.contains('Gemma') && !state.contains('Qwen')) {
-          state = 'Gemma 12B  (/v1  -  hızlı)';
-          try { ref.read(settingsProvider.notifier).setPreferredModel(state); } catch (_) {}
-        }
-      } else {
-        final fileName = p.basename(runningModel);
-        if (state != fileName) {
-          state = fileName;
-          try { ref.read(settingsProvider.notifier).setPreferredModel(fileName); } catch (_) {}
-        }
+      final fileName = p.basename(runningModel);
+      if (state != fileName) {
+        state = fileName;
+        try { ref.read(settingsProvider.notifier).setPreferredModel(fileName); } catch (_) {}
       }
       ref.read(isBackendRunningProvider.notifier).state = true;
     } else {
       // Sunucu şu an çalışmıyorsa ve seçili model "Model İndirin..." ise diskteki ilk GGUF'ı otomatik seç
-      if (!_isWebApi && (state.startsWith('Model İndirin') || state.contains('Fallback'))) {
+      if ((state.startsWith('Model İndirin') || state.contains('Fallback'))) {
         try {
           for (final dirPath in getModelScanDirs()) {
             final d = Directory(dirPath);
@@ -403,11 +335,6 @@ class SelectedModelNotifier extends Notifier<String> {
     state = newModelName;
     try { ref.read(settingsProvider.notifier).setPreferredModel(newModelName); } catch (_) {}
 
-    if (_isWebApi) {
-      ref.read(isBackendRunningProvider.notifier).state = true;
-      return;
-    }
-
     ref.read(isModelSwitchingProvider.notifier).state = true;
     try {
       final backendManager = ref.read(backendManagerProvider);
@@ -422,14 +349,6 @@ class SelectedModelNotifier extends Notifier<String> {
   }
 
   Future<void> startModel() async {
-    if (_isWebApi) {
-      final runningModel = await fetchRunningServerModel(baseUrlForModel(state));
-      if (runningModel != null && runningModel.isNotEmpty) {
-        ref.read(isBackendRunningProvider.notifier).state = true;
-      }
-      return;
-    }
-
     final runningModel = await fetchRunningServerModel();
     if (runningModel != null && runningModel.isNotEmpty) {
       final fileName = p.basename(runningModel);

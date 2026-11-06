@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../aegis/aegis_service.dart';
+import '../../agent/permissions.dart';
 import '../../services/app_paths.dart';
 import '../../services/mcp_service.dart';
 
@@ -31,6 +32,17 @@ class SettingsState {
   final int mcpTimeoutSeconds;
   final List<String> disabledMcpServers;
 
+  // Güvenlik / çalışma alanı
+  final PermissionMode permissionMode;
+  final String workspaceDir;
+
+  /// Ajanın göreceli yolları çözdüğü ve komutları çalıştırdığı dizin.
+  String get effectiveWorkspaceDir {
+    final ws = workspaceDir.trim();
+    if (ws.isNotEmpty && Directory(ws).existsSync()) return ws;
+    return AppPaths.homeDir;
+  }
+
   SettingsState({
     required this.useGpuForStt,
     required this.useGpuForTts,
@@ -49,6 +61,8 @@ class SettingsState {
     this.mcpAutoDiscover = true,
     this.mcpTimeoutSeconds = 60,
     this.disabledMcpServers = const [],
+    this.permissionMode = PermissionMode.autoEdit,
+    this.workspaceDir = '',
   });
 
   bool isMcpServerEnabled(String serverName) {
@@ -74,6 +88,8 @@ class SettingsState {
     bool? mcpAutoDiscover,
     int? mcpTimeoutSeconds,
     List<String>? disabledMcpServers,
+    PermissionMode? permissionMode,
+    String? workspaceDir,
   }) {
     return SettingsState(
       useGpuForStt: useGpuForStt ?? this.useGpuForStt,
@@ -93,6 +109,8 @@ class SettingsState {
       mcpAutoDiscover: mcpAutoDiscover ?? this.mcpAutoDiscover,
       mcpTimeoutSeconds: mcpTimeoutSeconds ?? this.mcpTimeoutSeconds,
       disabledMcpServers: disabledMcpServers ?? this.disabledMcpServers,
+      permissionMode: permissionMode ?? this.permissionMode,
+      workspaceDir: workspaceDir ?? this.workspaceDir,
     );
   }
 }
@@ -141,6 +159,8 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
           mcpAutoDiscover: prefs.getBool('mcpAutoDiscover') ?? true,
           mcpTimeoutSeconds: prefs.getInt('mcpTimeoutSeconds') ?? 60,
           disabledMcpServers: prefs.getStringList('disabledMcpServers') ?? [],
+          permissionMode: permissionModeFromName(prefs.getString('permissionMode')),
+          workspaceDir: prefs.getString('workspaceDir') ?? '',
         )) {
     try {
       McpService.instance.loadConfig(state.mcpConfigPath);
@@ -150,6 +170,16 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   void setPreferredModel(String modelName) {
     state = state.copyWith(preferredModel: modelName);
     prefs.setString('preferredModel', modelName);
+  }
+
+  void setPermissionMode(PermissionMode mode) {
+    state = state.copyWith(permissionMode: mode);
+    prefs.setString('permissionMode', mode.name);
+  }
+
+  void setWorkspaceDir(String dir) {
+    state = state.copyWith(workspaceDir: dir.trim());
+    prefs.setString('workspaceDir', dir.trim());
   }
 
   void setBackendEngine(String engine) {
@@ -186,8 +216,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     state = state.copyWith(useGpuForLlm: value);
     prefs.setBool('useGpuForLlm', value);
   }
-
-  void toggleGpuForLlm(bool value) => toggleLlmGpu(value);
 
   void setSkillsPath(String path) {
     state = state.copyWith(skillsPath: path);

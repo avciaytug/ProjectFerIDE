@@ -5,9 +5,6 @@ import 'features/chat/ide_shell.dart';
 import 'features/chat/state.dart'; // added to access themeModeProvider
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
-import 'dart:convert';
-import 'dart:async';
-import 'package:http/http.dart' as http;
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
@@ -15,6 +12,9 @@ import 'features/settings/settings_provider.dart';
 import 'services/app_paths.dart';
 import 'services/process_manager.dart';
 import 'services/pty_sandbox.dart';
+import 'services/mcp_service.dart';
+import 'agent/permissions.dart';
+import 'features/chat/approval_listener.dart';
 import 'package:window_manager/window_manager.dart';
 
 void main() async {
@@ -63,7 +63,6 @@ void main() async {
   // bastığında sıfır bekleme ile anında yazıya çevirsin.
   final processManager = ProcessManager.instance;
   if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
-    // ProcessManager.startAll lazily initialized on demand
     ProcessSignal.sigint.watch().listen((_) => _cleanupAndExit(processManager));
     if (!Platform.isWindows) {
       ProcessSignal.sigterm.watch().listen((_) => _cleanupAndExit(processManager));
@@ -92,32 +91,13 @@ void _logFerideError(String kind, String message, String stack) {
 
 Future<void> _cleanupAndExit(ProcessManager pm) async {
   try {
-    // Ollama'daki yüklü modelleri RAM'den temizle (GPU/RAM boşalt)
-    try {
-      final res = await http
-          .get(Uri.parse('http://127.0.0.1:11434/api/ps'))
-          .timeout(const Duration(milliseconds: 1500));
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final models = data['models'] as List?;
-        if (models != null) {
-          for (var m in models) {
-            final modelName = m['name'];
-            await http
-                .post(
-                  Uri.parse('http://127.0.0.1:11434/api/generate'),
-                  headers: {'Content-Type': 'application/json'},
-                  body: jsonEncode({"model": modelName, "keep_alive": 0}),
-                )
-                .timeout(const Duration(milliseconds: 1500));
-          }
-        }
-      }
-    } catch (_) {}
-
-    try {
-      await PtySandbox.killAllActiveProcesses();
-    } catch (_) {}
+    ApprovalBroker.instance.rejectAll();
+    await McpService.instance.shutdownAll().timeout(const Duration(seconds: 3));
+  } catch (_) {}
+  try {
+    await PtySandbox.killAllActiveProcesses();
+  } catch (_) {}
+  try {
     pm.killAll();
   } catch (_) {}
   exit(0);
@@ -199,7 +179,7 @@ class _FerIDEAppState extends ConsumerState<FerIDEApp> with WindowListener {
           elevation: 0,
         ),
       ),
-      home: const IdeShell(),
+      home: const ApprovalListener(child: IdeShell()),
     );
   }
 }

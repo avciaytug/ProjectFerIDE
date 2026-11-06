@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 class ProcessTreeKiller {
   static Future<void> kill(int pid, {Duration grace = const Duration(milliseconds: 2000), bool force = true}) async {
@@ -154,8 +155,11 @@ class PtySandbox {
 
     try {
       final exitCode = await process.exitCode;
-      
       timeoutTimer?.cancel();
+      // Süreç bittikten sonra borularda kalan son çıktıyı da topla
+      // (eskiden abonelik hemen iptal edildiği için son satırlar kayboluyordu).
+      await Future.wait([stdoutSub.asFuture<void>(), stderrSub.asFuture<void>()])
+          .timeout(const Duration(seconds: 2), onTimeout: () => const []);
       await stdoutSub.cancel();
       await stderrSub.cancel();
 

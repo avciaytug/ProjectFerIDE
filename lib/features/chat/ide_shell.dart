@@ -6,6 +6,7 @@ import 'widgets/aurora_background.dart';
 import 'widgets/ide_sidebar.dart';
 import 'agent_panel.dart';
 import 'state.dart';
+import '../../agent/permissions.dart';
 import '../../theme/ide_palette.dart';
 import '../live/live_session_view.dart';
 import 'dart:async';
@@ -1516,24 +1517,54 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
                               contentPadding: EdgeInsets.zero,
                             ),
                             const Divider(),
-                            SwitchListTile(
-                              title: Text('Tam Otonom Mod',
-                                  style: TextStyle(
-                                      color: textColor,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14)),
-                              subtitle: Text(
-                                  'Komutların onayınız olmadan otomatik çalışmasına izin verir.',
-                                  style: TextStyle(
-                                      color: secondaryTextColor, fontSize: 12)),
-                              value: ref.watch(autonomousModeProvider),
-                              activeColor: IdePalette.accentSoft,
-                              onChanged: (val) {
-                                ref
-                                    .read(autonomousModeProvider.notifier)
-                                    .state = val;
-                              },
-                              contentPadding: EdgeInsets.zero,
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('İzin Modu (Güvenlik)',
+                                      style: TextStyle(
+                                          color: textColor,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14)),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                      'Ajanın hangi işlemleri onayınızı almadan yapabileceğini belirler. Disk silme gibi yıkıcı komutlar her modda engellenir; sudo, rm -r, paket kurma gibi riskli komutlar her zaman sorulur.',
+                                      style: TextStyle(
+                                          color: secondaryTextColor,
+                                          fontSize: 12)),
+                                  const SizedBox(height: 12),
+                                  DropdownButtonFormField<PermissionMode>(
+                                    value: ref.watch(settingsProvider).permissionMode,
+                                    isExpanded: true,
+                                    decoration: InputDecoration(
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    dropdownColor: Theme.of(context).scaffoldBackgroundColor,
+                                    items: PermissionMode.values
+                                        .map((m) => DropdownMenuItem(
+                                            value: m,
+                                            child: Text(permissionModeLabel(m),
+                                                style: TextStyle(color: textColor, fontSize: 13))))
+                                        .toList(),
+                                    onChanged: (m) {
+                                      if (m != null) ref.read(settingsProvider.notifier).setPermissionMode(m);
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Divider(),
+                            _buildDirectorySetting(
+                              context,
+                              title: 'Çalışma Alanı (Workspace)',
+                              subtitle: 'Ajanın göreceli yolları çözdüğü ve komutları çalıştırdığı klasör. "Dosya düzenlemeye izin ver" modunda yalnızca bu klasörün içindeki değişiklikler onaysız yapılır. Boş bırakılırsa ev dizini kullanılır.',
+                              value: ref.watch(settingsProvider).effectiveWorkspaceDir,
+                              onChanged: (dir) => ref.read(settingsProvider.notifier).setWorkspaceDir(dir),
+                              isLight: isLight,
+                              textColor: textColor,
+                              secondaryTextColor: secondaryTextColor,
                             ),
                             const Divider(),
                             Padding(
@@ -1620,7 +1651,6 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
                                     style: TextStyle(
                                         color: textColor, fontSize: 13),
                                     onChanged: (val) {
-                                      ref.read(apiUrlProvider.notifier).state = val;
                                       ref.read(settingsProvider.notifier).setApiUrl(val);
                                     },
                                     decoration: InputDecoration(
@@ -1654,7 +1684,7 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
                               activeColor: IdePalette.accentSoft,
                               onChanged: (val) => ref
                                   .read(settingsProvider.notifier)
-                                  .toggleGpuForLlm(val),
+                                  .toggleLlmGpu(val),
                               contentPadding: EdgeInsets.zero,
                             ),
                             const Divider(),
@@ -1722,7 +1752,6 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
                                                 ? 'http://127.0.0.1:8000/v1'
                                                 : 'http://127.0.0.1:8080/v1');
                                         _apiController.text = suggestedUrl;
-                                        ref.read(apiUrlProvider.notifier).state = suggestedUrl;
                                         ref.read(settingsProvider.notifier).setApiUrl(suggestedUrl);
                                       }
                                     },

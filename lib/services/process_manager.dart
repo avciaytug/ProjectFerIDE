@@ -207,33 +207,10 @@ class ProcessManager {
         }
       } catch (_) {}
     }
+    // Yalnızca BU uygulamanın başlattığı süreçler öldürülür. Eskiden
+    // `pkill -f stt_server.py` ile sistemdeki tüm eşleşen süreçler (başka bir
+    // FerIDE örneği veya testler dahil) öldürülüyordu.
     _processes.clear();
-
-    const patterns = [
-      'stt_server.py',
-      'xtts_server.py',
-      'piper_tts_server.py',
-      'edge_tts_server.py',
-      'voice_engine_daemon.py',
-    ];
-
-    if (Platform.isWindows) {
-      try {
-        final regex = patterns.map((e) => e.replaceAll('.', r'\.')).join('|');
-        Process.runSync('powershell', [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -match '$regex' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }",
-        ]);
-      } catch (_) {}
-    } else {
-      for (final pattern in patterns) {
-        try {
-          Process.runSync('pkill', ['-f', pattern]);
-        } catch (_) {}
-      }
-    }
   }
 
   bool _alreadyRunning(String pattern) {
@@ -256,29 +233,5 @@ class ProcessManager {
     } catch (_) {
       return false;
     }
-  }
-
-  Future<void> unloadOllamaModels() async {
-    try {
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
-      final request = await client.getUrl(Uri.parse('http://127.0.0.1:11434/api/ps'));
-      final response = await request.close();
-      if (response.statusCode == 200) {
-        final body = await response.transform(dart_convert.utf8.decoder).join();
-        final data = dart_convert.jsonDecode(body);
-        final models = data['models'] as List?;
-        if (models != null) {
-          for (final m in models) {
-            final modelName = m['name'];
-            final postReq = await client.postUrl(Uri.parse('http://127.0.0.1:11434/api/generate'));
-            postReq.headers.contentType = ContentType.json;
-            postReq.write(dart_convert.jsonEncode({'model': modelName, 'keep_alive': 0}));
-            final postRes = await postReq.close();
-            await postRes.drain();
-          }
-        }
-      }
-      client.close();
-    } catch (_) {}
   }
 }

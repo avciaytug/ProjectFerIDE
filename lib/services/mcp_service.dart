@@ -5,60 +5,6 @@ import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
 import 'app_paths.dart';
 
-/// Bir MCP stdio surecinin stdout akisini TEK seferde dinler ve gelen
-/// JSON-RPC yanitlarini `id`'lerine gore ilgili bekleyiciye (completer)
-/// yonlendirir.
-///
-/// Dart'ta Process.stdout single-subscription akistir; bir kez `listen`
-/// edilen akisi `StreamSubscription.cancel()` bile olsa "dinlendi" olarak
-/// isaretler. MCP'de initialize el sikismasi stdout'u dinler, ardindan
-/// tools/call yeniden dinlemek ister -> "Stream has already been listened
-/// to". Bu dispatcher akisi tek dinleyiciyle acik tutarak her yaniti
-/// dogru id'ye teslim eder.
-class _McpStdioDispatcher {
-  final Process _proc;
-  final Map<Object, Completer<Map<String, dynamic>>> _waiters = {};
-  StreamSubscription<String>? _sub;
-
-  _McpStdioDispatcher(this._proc) {
-    _sub = _proc.stdout
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen((line) {
-      try {
-        final decoded = jsonDecode(line) as Map<String, dynamic>;
-        final id = decoded["id"];
-        if (id == null) return; // bildirim (notification)
-        final waiter = _waiters.remove(id);
-        if (waiter != null && !waiter.isCompleted) {
-          waiter.complete(decoded);
-        }
-      } catch (_) {}
-    });
-  }
-
-  /// Verilen `id`'li JSON-RPC yanitini bekler.
-  Future<Map<String, dynamic>> next(int id) {
-    final completer = Completer<Map<String, dynamic>>();
-    _waiters[id] = completer;
-    return completer.future;
-  }
-
-  Future<void> dispose() async {
-    try {
-      await _sub?.cancel();
-    } catch (_) {}
-    _waiters.clear();
-  }
-}
-
-/// Kurulmus bir MCP stdio baglantisinin sureci ve stdout dispatcher'i.
-class _McpConnection {
-  final Process proc;
-  final _McpStdioDispatcher dispatcher;
-  _McpConnection(this.proc, this.dispatcher);
-}
-
 /// MCP (Model Context Protocol) Sunucu Yapilandirma Modeli
 class McpServerConfig {
   final String name;
@@ -260,12 +206,14 @@ class McpService {
     } else {
       _servers.add(server);
     }
+    unawaited(_closeSession(server.name));
     saveConfig();
   }
 
   /// Sunucuyu siler
   void deleteServer(String name) {
     _servers.removeWhere((s) => s.name == name);
+    unawaited(_closeSession(name));
     saveConfig();
   }
 
@@ -277,239 +225,190 @@ class McpService {
         isEnabled: enabled,
         status: enabled ? "Hazır" : "Devre Dışı",
       );
+      if (!enabled) unawaited(_closeSession(name));
       saveConfig();
     }
   }
 
-  /// Sunucu baglantisini test eder
+  // ---------------------------------------------------------------------------
+  // MCP istemcisi: kalıcı bağlantılar, tools/list keşfi ve tools/call.
+  // stdio (yerel süreç) ve Streamable HTTP taşıyıcıları desteklenir.
+  // ---------------------------------------------------------------------------
+
+  final Map<String, _McpSession> _sessions = {};
+  final Map<String, List<McpToolInfo>> _toolCache = {};
+
+  /// Sunucu bağlantısını gerçekten kurar ve araç listesini çeker.
   Future<Map<String, dynamic>> testServer(McpServerConfig server) async {
     final idx = _servers.indexWhere((s) => s.name == server.name);
-    if (server.transport == "sse" || server.transport == "http") {
-      try {
-        final dio = Dio();
-        final res = await dio.get(
-          server.url,
-          options: Options(
-            validateStatus: (status) => true,
-            sendTimeout: const Duration(seconds: 4),
-            receiveTimeout: const Duration(seconds: 4),
-          ),
-        );
-        final success = res.statusCode != null && res.statusCode! < 500;
-        final newStatus = success ? "Bağlantı Başarılı (${res.statusCode})" : "Hata (${res.statusCode})";
-        if (idx >= 0) {
-          _servers[idx] = _servers[idx].copyWith(status: newStatus);
-        }
-        return {"success": success, "message": "SSE/HTTP Yanıtı: ${res.statusCode}"};
-      } catch (e) {
-        if (idx >= 0) {
-          _servers[idx] = _servers[idx].copyWith(status: "Erişilemedi");
-        }
-        return {"success": false, "message": "Bağlantı kurulamadı: $e"};
-      }
-    } else {
-      try {
-        final cmd = server.command.trim();
-        if (cmd.isEmpty) {
-          return {"success": false, "message": "Komut tanımlanmamış"};
-        }
-        final check = await Process.run("which", [cmd]);
-        if (check.exitCode == 0) {
-          final binaryPath = check.stdout.toString().trim();
-          final newStatus = "Bağlantı Hazır ($cmd)";
-          if (idx >= 0) {
-            _servers[idx] = _servers[idx].copyWith(status: newStatus);
-          }
-          return {
-            "success": true,
-            "message": "Komut doğrulandı: $binaryPath",
-          };
-        } else {
-          final newStatus = "Komut Bulunamadı ($cmd)";
-          if (idx >= 0) {
-            _servers[idx] = _servers[idx].copyWith(status: newStatus);
-          }
-          return {
-            "success": false,
-            "message": "$cmd sistem PATH içinde bulunamadı.",
-          };
-        }
-      } catch (e) {
-        if (idx >= 0) {
-          _servers[idx] = _servers[idx].copyWith(status: "Hata");
-        }
-        return {"success": false, "message": "Hata: $e"};
-      }
-    }
-  }
-
-  /// Populer ve hazir MCP sablonlari
-  // ---------------------------------------------------------------------------
-  // Gercek MCP stdio JSON-RPC istemcisi (initialize + tools/call)
-  // ---------------------------------------------------------------------------
-
-  /// node/npx/npm gibi komutlari sisteme bagimsiz olarak bulur.
-  /// Bu makinede node/npx PATH'te olmayabilir; bilinen yerlerden cozulur.
-  static String? _resolveBinary(String cmd) {
-    final sep = Platform.isWindows ? ';' : ':';
-    final pathRaw = Platform.environment['PATH'] ?? Platform.environment['Path'] ?? '';
-    final pathDirs = pathRaw.split(sep).where((dir) => dir.isNotEmpty);
-    final candidates = Platform.isWindows
-        ? <String>[cmd, '$cmd.cmd', '$cmd.exe']
-        : <String>[cmd];
-    for (final d in pathDirs) {
-      for (final c in candidates) {
-        final candidate = File(p.join(d, c));
-        if (candidate.existsSync() && candidate.statSync().type == FileSystemEntityType.file) {
-          return candidate.path;
-        }
-      }
-    }
-    final fallbacks = <String>[
-      if (Platform.isMacOS) '/opt/homebrew/bin',
-      if (!Platform.isWindows) ...[
-        '/usr/local/bin',
-        '/usr/bin',
-      ],
-      if (Platform.isWindows) r'C:\Program Files\nodejs',
-    ];
-    for (final d in fallbacks) {
-      for (final c in candidates) {
-        final candidate = File(p.join(d, c));
-        if (candidate.existsSync() && candidate.statSync().type == FileSystemEntityType.file) {
-          return candidate.path;
-        }
-      }
-    }
-    return null;
-  }
-
-  /// Verilen sunucu icin MCP stdio baglantisi kurar (initialize el sikismasi).
-  /// Basarida (surec + stdout dispatcher) doner, hatada null.
-  Future<_McpConnection?> _connect(McpServerConfig server) async {
-    final cmd = server.command.trim();
-    if (cmd.isEmpty) return null;
-
-    final resolved = _resolveBinary(cmd);
-    final Process proc;
-    if (resolved != null) {
-      proc = await Process.start(resolved, server.args,
-          environment: {
-            ...Platform.environment,
-            ...server.env,
-            // npx/uvx icin gereksiz sorulari kapat
-            "NO_COLOR": "1",
-            "FORCE_COLOR": "0",
-          },
-          mode: ProcessStartMode.normal);
-    } else {
-      // Cok parcali komutlar icin (ornek: "python3 -m ...") degiskeni ayirtla
-      final parts = cmd.split(' ');
-      proc = await Process.start(
-          parts.first, [...parts.skip(1), ...server.args],
-          environment: {...Platform.environment, ...server.env},
-          mode: ProcessStartMode.normal);
+    void setStatus(String st, [List<String>? tools]) {
+      if (idx >= 0) _servers[idx] = _servers[idx].copyWith(status: st, tools: tools);
     }
 
-    // stdout'u TEK dinleyiciyle acik tut; yanitlar id'ye gore yonlendirilir.
-    final dispatcher = _McpStdioDispatcher(proc);
-
-    final initRequest = jsonEncode({
-      "jsonrpc": "2.0",
-      "id": 1,
-      "method": "initialize",
-      "params": {
-        "protocolVersion": "2024-11-05",
-        "capabilities": {},
-        "clientInfo": {"name": "FerIDE", "version": "5.3.0"},
-      },
-    });
-    proc.stdin.write('$initRequest\n');
-    await proc.stdin.flush();
-
-    // initialize yanitini bekle (8 sn)
     try {
-      await dispatcher.next(1).timeout(const Duration(seconds: 8));
-    } catch (_) {
-      await dispatcher.dispose();
-      proc.kill(ProcessSignal.sigterm);
-      return null;
+      await _closeSession(server.name);
+      final tools = await listTools(server, refresh: true);
+      final names = tools.map((t) => t.name).toList();
+      setStatus('Bağlandı (${names.length} araç)', names);
+      return {"success": true, "message": "Bağlantı başarılı. Araçlar: ${names.join(', ')}"};
+    } catch (e) {
+      setStatus('Hata');
+      return {"success": false, "message": "Bağlantı kurulamadı: $e"};
     }
-
-    // initialized bildirimini gonder
-    proc.stdin.write('${jsonEncode({"jsonrpc": "2.0", "method": "notifications/initialized"})}\n');
-    await proc.stdin.flush();
-    return _McpConnection(proc, dispatcher);
   }
 
-  /// Gercek MCP araci cagrisi: sunucuyu baslatir, tools/call gonderir,
-  /// sonucu metin olarak dondurur ve sureci kapatir.
+  /// Bir sunucunun araçlarını döndürür (önbellekli).
+  Future<List<McpToolInfo>> listTools(McpServerConfig server, {bool refresh = false}) async {
+    if (!refresh && _toolCache.containsKey(server.name)) return _toolCache[server.name]!;
+    final session = await _session(server);
+    final result = await session.request('tools/list', {}, timeout: const Duration(seconds: 20));
+    final tools = <McpToolInfo>[];
+    final list = result['tools'];
+    if (list is List) {
+      for (final t in list) {
+        if (t is! Map || t['name'] == null) continue;
+        final annotations = t['annotations'];
+        tools.add(McpToolInfo(
+          server: server.name,
+          name: t['name'].toString(),
+          description: (t['description'] ?? '').toString(),
+          inputSchema: t['inputSchema'] is Map ? Map<String, dynamic>.from(t['inputSchema']) : const {},
+          readOnlyHint: annotations is Map && annotations['readOnlyHint'] == true,
+        ));
+      }
+    }
+    _toolCache[server.name] = tools;
+    return tools;
+  }
+
+  /// Verilen etkin sunucuların araçlarını paralel keşfeder; ulaşılamayanları atlar.
+  Future<List<McpToolInfo>> discoverTools(Iterable<McpServerConfig> servers,
+      {Duration timeout = const Duration(seconds: 25)}) async {
+    final results = await Future.wait(servers.map((s) async {
+      try {
+        return await listTools(s).timeout(timeout);
+      } catch (_) {
+        return <McpToolInfo>[];
+      }
+    }));
+    return results.expand((e) => e).toList();
+  }
+
+  /// Ada göre araç çağırır (ajan tarafından kullanılır).
+  Future<String> callToolByName(String serverName, String toolName, Map<String, dynamic> arguments,
+      {int timeoutSeconds = 60}) async {
+    final server = _servers.where((s) => s.name == serverName).firstOrNull;
+    if (server == null) return '[MCP] Sunucu bulunamadı: $serverName';
+    return callTool(server, toolName, arguments, timeoutSeconds: timeoutSeconds);
+  }
+
   Future<String> callTool(
     McpServerConfig server,
     String toolName,
     Map<String, dynamic> arguments, {
     int timeoutSeconds = 60,
   }) async {
-    _McpConnection? conn;
+    _McpSession session;
     try {
-      conn = await _connect(server);
+      session = await _session(server);
     } catch (e) {
-      return "[MCP ${server.name}] Hata: Surec baslatilamadi (komut bulunamadi: ${server.command}) - $e";
+      return "[MCP ${server.name}] Hata: Bağlantı kurulamadı (${server.command}${server.url}) - $e";
     }
-    if (conn == null) {
-      return "[MCP ${server.name}] Hata: initialize el sikismasi kurulamadi (timeout veya komut bulunamadi: ${server.command})";
-    }
-
     try {
-      const callId = 2;
-      final request = jsonEncode({
-        "jsonrpc": "2.0",
-        "id": callId,
-        "method": "tools/call",
-        "params": {"name": toolName, "arguments": arguments},
-      });
-      conn.proc.stdin.write('$request\n');
-      await conn.proc.stdin.flush();
-
-      try {
-        final decoded = await conn.dispatcher
-            .next(callId)
-            .timeout(Duration(seconds: timeoutSeconds));
-        final result = decoded["result"];
-        if (decoded.containsKey("error")) {
-          final err = decoded["error"];
-          return "[MCP ${server.name}::$toolName] JSON-RPC Hata: ${err is Map ? err['message'] ?? err : err}";
-        } else if (result is Map && result.containsKey("content")) {
-          final content = result["content"];
-          final sb = StringBuffer();
-          if (content is List) {
-            for (final part in content) {
-              if (part is Map && part.containsKey("text")) {
-                sb.write(part["text"]);
-                sb.write("\n");
-              } else {
-                sb.write(part.toString());
-                sb.write("\n");
-              }
-            }
-          } else {
-            sb.write(content?.toString() ?? "");
-          }
-          final isError = (result["isError"] ?? false).toString();
-          return (isError == "true" ? "[MCP ${server.name}::$toolName] ⚠️ " : "") +
-              sb.toString().trim();
-        } else {
-          return "[MCP ${server.name}::$toolName] Sonuc: ${result ?? 'boş'}";
-        }
-      } on TimeoutException {
-        return "[MCP ${server.name}::$toolName] Zaman asimi ($timeoutSeconds sn).";
-      }
-    } finally {
-      await conn.dispatcher.dispose();
-      try {
-        conn.proc.kill(ProcessSignal.sigterm);
-      } catch (_) {}
+      final result = await session.request('tools/call', {"name": toolName, "arguments": arguments},
+          timeout: Duration(seconds: timeoutSeconds));
+      return _formatToolResult(server.name, toolName, result);
+    } on TimeoutException {
+      return "[MCP ${server.name}::$toolName] Zaman aşımı ($timeoutSeconds sn).";
+    } on McpRpcError catch (e) {
+      return "[MCP ${server.name}::$toolName] JSON-RPC Hata: ${e.message}";
+    } catch (e) {
+      // Süreç çökmüş olabilir: bağlantıyı at, bir sonraki çağrıda yeniden kurulur.
+      await _closeSession(server.name);
+      return "[MCP ${server.name}::$toolName] Hata: $e";
     }
+  }
+
+  static String _formatToolResult(String server, String tool, Map<String, dynamic> result) {
+    final content = result["content"];
+    final sb = StringBuffer();
+    if (content is List) {
+      for (final part in content) {
+        if (part is Map && part["type"] == "text") {
+          sb.writeln(part["text"]);
+        } else if (part is Map && part["type"] == "image") {
+          sb.writeln('[görsel: ${part["mimeType"] ?? "image"}]');
+        } else if (part is Map && part["type"] == "resource") {
+          final r = part["resource"];
+          sb.writeln(r is Map ? (r["text"] ?? r["uri"] ?? r).toString() : r.toString());
+        } else {
+          sb.writeln(part.toString());
+        }
+      }
+    } else if (result["structuredContent"] != null) {
+      sb.write(jsonEncode(result["structuredContent"]));
+    } else {
+      sb.write(content?.toString() ?? jsonEncode(result));
+    }
+    final isError = result["isError"] == true;
+    return (isError ? "[MCP $server::$tool] ⚠️ " : "") + sb.toString().trim();
+  }
+
+  Future<_McpSession> _session(McpServerConfig server) async {
+    final existing = _sessions[server.name];
+    if (existing != null && existing.isAlive) return existing;
+    if (existing != null) await _closeSession(server.name);
+
+    final session = (server.transport == 'http' || server.transport == 'sse' || server.url.isNotEmpty)
+        ? _McpHttpSession(server.url, server.env)
+        : await _McpStdioSession.start(server);
+    try {
+      await session.request('initialize', {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "FerIDE", "version": "6.0.0"},
+      }, timeout: const Duration(seconds: 30));
+      session.notify('notifications/initialized');
+    } catch (e) {
+      await session.close();
+      rethrow;
+    }
+    _sessions[server.name] = session;
+    return session;
+  }
+
+  Future<void> _closeSession(String name) async {
+    _toolCache.remove(name);
+    final s = _sessions.remove(name);
+    if (s != null) await s.close();
+  }
+
+  /// Tüm MCP süreçlerini kapatır (uygulama kapanırken).
+  Future<void> shutdownAll() async {
+    for (final name in _sessions.keys.toList()) {
+      await _closeSession(name);
+    }
+  }
+
+  /// node/npx/uvx gibi komutları PATH ve bilinen konumlardan bulur.
+  static String? resolveBinary(String cmd) {
+    if (p.isAbsolute(cmd)) return File(cmd).existsSync() ? cmd : null;
+    final sep = Platform.isWindows ? ';' : ':';
+    final pathRaw = Platform.environment['PATH'] ?? Platform.environment['Path'] ?? '';
+    final dirs = <String>[
+      ...pathRaw.split(sep).where((d) => d.isNotEmpty),
+      if (Platform.isMacOS) '/opt/homebrew/bin',
+      if (!Platform.isWindows) ...['/usr/local/bin', '/usr/bin', p.join(AppPaths.homeDir, '.local', 'bin')],
+      if (Platform.isWindows) r'C:\Program Files\nodejs',
+    ];
+    final names = Platform.isWindows ? [cmd, '$cmd.cmd', '$cmd.exe', '$cmd.bat'] : [cmd];
+    for (final d in dirs) {
+      for (final n in names) {
+        final f = File(p.join(d, n));
+        if (f.existsSync()) return f.path;
+      }
+    }
+    return null;
   }
 
   List<McpServerConfig> getRecommendedPresets() {
@@ -577,5 +476,227 @@ class McpService {
         tools: ["navigate", "screenshot", "click", "fill", "evaluate_script"],
       ),
     ];
+  }
+}
+
+
+/// Bir MCP aracının tanımı.
+class McpToolInfo {
+  final String server;
+  final String name;
+  final String description;
+  final Map<String, dynamic> inputSchema;
+  final bool readOnlyHint;
+
+  const McpToolInfo({
+    required this.server,
+    required this.name,
+    required this.description,
+    required this.inputSchema,
+    this.readOnlyHint = false,
+  });
+
+  /// Modelin göreceği araç adı. OpenAI uyumlu adlar [a-zA-Z0-9_-] ile sınırlı.
+  String get qualifiedName {
+    String clean(String s) => s.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final full = 'mcp__${clean(server)}__${clean(name)}';
+    return full.length <= 64 ? full : full.substring(0, 64);
+  }
+}
+
+class McpRpcError implements Exception {
+  final String message;
+  McpRpcError(this.message);
+  @override
+  String toString() => message;
+}
+
+abstract class _McpSession {
+  bool get isAlive;
+  Future<Map<String, dynamic>> request(String method, Map<String, dynamic> params, {required Duration timeout});
+  void notify(String method, [Map<String, dynamic>? params]);
+  Future<void> close();
+
+  static Map<String, dynamic> unwrap(Map<String, dynamic> msg) {
+    if (msg['error'] != null) {
+      final err = msg['error'];
+      throw McpRpcError(err is Map ? (err['message'] ?? err).toString() : err.toString());
+    }
+    final r = msg['result'];
+    return r is Map ? Map<String, dynamic>.from(r) : <String, dynamic>{};
+  }
+}
+
+/// Yerel süreç üzerinden satır bazlı JSON-RPC.
+class _McpStdioSession extends _McpSession {
+  final Process _proc;
+  final Map<int, Completer<Map<String, dynamic>>> _waiters = {};
+  final List<String> _stderrTail = [];
+  int _nextId = 1;
+  bool _alive = true;
+
+  _McpStdioSession._(this._proc) {
+    _proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+      try {
+        final msg = jsonDecode(line);
+        if (msg is! Map) return;
+        final id = msg['id'];
+        if (id is int && msg.containsKey('method') == false) {
+          _waiters.remove(id)?.complete(Map<String, dynamic>.from(msg));
+        }
+      } catch (_) {}
+    }, onDone: _onExit);
+    // stderr okunmazsa boru tamponu dolar ve sunucu kilitlenir.
+    _proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((l) {
+      _stderrTail.add(l);
+      if (_stderrTail.length > 20) _stderrTail.removeAt(0);
+    });
+    _proc.exitCode.then((_) => _onExit());
+  }
+
+  static Future<_McpStdioSession> start(McpServerConfig server) async {
+    final cmd = server.command.trim();
+    if (cmd.isEmpty) throw McpRpcError('Komut tanımlanmamış');
+    String exe;
+    List<String> args;
+    final resolved = McpService.resolveBinary(cmd);
+    if (resolved != null) {
+      exe = resolved;
+      args = server.args;
+    } else if (cmd.contains(' ')) {
+      final parts = cmd.split(RegExp(r'\s+'));
+      exe = McpService.resolveBinary(parts.first) ?? parts.first;
+      args = [...parts.skip(1), ...server.args];
+    } else {
+      throw McpRpcError('"$cmd" bulunamadı (PATH içinde yok). Node.js/uv kurulu mu?');
+    }
+    final proc = await Process.start(exe, args,
+        environment: {
+          ...AppPaths.buildSubprocessEnv(),
+          ...server.env,
+          "NO_COLOR": "1",
+          "FORCE_COLOR": "0",
+        },
+        runInShell: Platform.isWindows && (exe.endsWith('.cmd') || exe.endsWith('.bat')));
+    return _McpStdioSession._(proc);
+  }
+
+  void _onExit() {
+    if (!_alive) return;
+    _alive = false;
+    final tail = _stderrTail.isEmpty ? '' : ' Son çıktı: ${_stderrTail.join(' | ')}';
+    for (final w in _waiters.values) {
+      if (!w.isCompleted) w.completeError(McpRpcError('MCP süreci kapandı.$tail'));
+    }
+    _waiters.clear();
+  }
+
+  @override
+  bool get isAlive => _alive;
+
+  @override
+  Future<Map<String, dynamic>> request(String method, Map<String, dynamic> params, {required Duration timeout}) async {
+    if (!_alive) throw McpRpcError('MCP süreci çalışmıyor');
+    final id = _nextId++;
+    final c = Completer<Map<String, dynamic>>();
+    _waiters[id] = c;
+    _proc.stdin.writeln(jsonEncode({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+    try {
+      return _McpSession.unwrap(await c.future.timeout(timeout));
+    } finally {
+      _waiters.remove(id);
+    }
+  }
+
+  @override
+  void notify(String method, [Map<String, dynamic>? params]) {
+    if (!_alive) return;
+    _proc.stdin.writeln(jsonEncode({"jsonrpc": "2.0", "method": method, if (params != null) "params": params}));
+  }
+
+  @override
+  Future<void> close() async {
+    _alive = false;
+    try {
+      await _proc.stdin.close();
+    } catch (_) {}
+    _proc.kill(ProcessSignal.sigterm);
+    try {
+      await _proc.exitCode.timeout(const Duration(seconds: 2));
+    } catch (_) {
+      _proc.kill(ProcessSignal.sigkill);
+    }
+  }
+}
+
+/// MCP Streamable HTTP taşıyıcısı (JSON veya SSE yanıtları).
+class _McpHttpSession extends _McpSession {
+  final String url;
+  final Map<String, String> headers;
+  final Dio _dio = Dio();
+  String? _sessionId;
+  int _nextId = 1;
+  bool _alive = true;
+
+  _McpHttpSession(this.url, this.headers);
+
+  @override
+  bool get isAlive => _alive;
+
+  Future<Map<String, dynamic>?> _post(Map<String, dynamic> body, Duration timeout) async {
+    final res = await _dio.post<String>(
+      url,
+      data: jsonEncode(body),
+      options: Options(
+        responseType: ResponseType.plain,
+        receiveTimeout: timeout,
+        sendTimeout: const Duration(seconds: 20),
+        validateStatus: (_) => true,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream',
+          if (_sessionId != null) 'Mcp-Session-Id': _sessionId!,
+          ...headers,
+        },
+      ),
+    );
+    _sessionId = res.headers.value('mcp-session-id') ?? _sessionId;
+    if ((res.statusCode ?? 500) >= 400) {
+      throw McpRpcError('HTTP ${res.statusCode}: ${res.data}');
+    }
+    final text = res.data ?? '';
+    if (text.trim().isEmpty) return null;
+    if ((res.headers.value('content-type') ?? '').contains('event-stream')) {
+      for (final line in const LineSplitter().convert(text)) {
+        if (!line.startsWith('data:')) continue;
+        try {
+          final m = jsonDecode(line.substring(5).trim());
+          if (m is Map && m['id'] == body['id']) return Map<String, dynamic>.from(m);
+        } catch (_) {}
+      }
+      return null;
+    }
+    final m = jsonDecode(text);
+    return m is Map ? Map<String, dynamic>.from(m) : null;
+  }
+
+  @override
+  Future<Map<String, dynamic>> request(String method, Map<String, dynamic> params, {required Duration timeout}) async {
+    final id = _nextId++;
+    final msg = await _post({"jsonrpc": "2.0", "id": id, "method": method, "params": params}, timeout).timeout(timeout);
+    if (msg == null) throw McpRpcError('Boş yanıt');
+    return _McpSession.unwrap(msg);
+  }
+
+  @override
+  void notify(String method, [Map<String, dynamic>? params]) {
+    _post({"jsonrpc": "2.0", "method": method, if (params != null) "params": params}, const Duration(seconds: 10))
+        .catchError((_) => null);
+  }
+
+  @override
+  Future<void> close() async {
+    _alive = false;
+    _dio.close(force: true);
   }
 }

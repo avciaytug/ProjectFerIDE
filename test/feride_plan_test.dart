@@ -100,32 +100,16 @@ void main() {
   });
 
   group('Task 2: Sesli oturumda tool aktif', () {
-    test('liveApiUrlProvider varsayılanı Ollama 11434 (hızlı Qwen orada)', () {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
-      // Not: 8081'deki ayrı llama-server hiç kurulmamıştı (connection refused) →
-      // Ollama'nın OpenAI-uyumlu endpoint'ine (11434) yönlendirildi.
-      expect(container.read(liveApiUrlProvider), 'http://127.0.0.1:11434/v1');
+    test('Sesli oturum ana model sunucusunu kullanır (ayrı Ollama yok)', () {
+      final text = _readAsset('lib/services/agent_engine.dart');
+      expect(text.contains('liveApiUrlProvider'), false);
+      expect(text.contains('apiUrlProvider'), true);
     });
 
-    test('AgentEngine: streaming her zaman açık (cümle bazlı TTS için)', () {
-      // Plan sonrası karar: canlı oturumda anında görsel/işitsel geri bildirim
-      // öncelikli → stream her zaman true (manuel SSE parsing destekli).
-      final text = _readAsset('lib/services/agent_engine.dart');
-      expect(
-        text.contains('final isStreaming = true;'),
-        true,
-        reason: 'Cümle bazlı TTS için streaming her zaman açık olmalı',
-      );
-    });
-
-    test('AgentEngine: tool listesi her zaman gönderilmeli (tool calling)', () {
-      final text = _readAsset('lib/services/agent_engine.dart');
-      expect(
-        (text.contains('"tools":') || text.contains('"tools": [')),
-        true,
-        reason: 'run_command tool\'u her zaman gönderilmeli ki ajan komut çalıştırabilsin',
-      );
+    test('LlmClient: akış (stream) her zaman açık ve araçlar gönderilir', () {
+      final text = _readAsset('lib/agent/llm_client.dart');
+      expect(text.contains("'stream': true"), true);
+      expect(text.contains("'tools': tools"), true);
     });
   });
 
