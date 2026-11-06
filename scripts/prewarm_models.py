@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE Model Ön-Isıtma (v5.3.6)
+FerIDE Model Ön-Isıtma (v5.3.7)
 ===============================
 Mevcut ortama göre (hafif venv veya tam ROCm feride_env) ses modellerini ön-ısıtır.
 """

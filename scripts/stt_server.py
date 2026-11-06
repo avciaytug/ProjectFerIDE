@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE STT (Speech-to-Text) Sunucusu (v5.3.6 — Linux / Windows / macOS)
+FerIDE STT (Speech-to-Text) Sunucusu (v5.3.7 — Linux / Windows / macOS)
 =======================================================================
 1) PyAV `metadata_errors` uyumsuzluğundan %100 bağımsız: gelen her türlü ses
    verisini (WAV, WebM, M4A, MP3, OGG, 48kHz/44.1kHz/16kHz, stereo/mono)

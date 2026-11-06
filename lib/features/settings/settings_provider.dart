@@ -39,6 +39,12 @@ class SettingsState {
   /// "Feride" uyandırma kelimesiyle eller serbest kullanım (mikrofon arka planda dinler).
   final bool wakeWordEnabled;
 
+  /// FerIDE'nin sesi: 'female' (Feride, varsayılan) veya 'male'.
+  final String ttsVoice;
+
+  /// Konuşma hızı çarpanı (0.8 – 1.3).
+  final double speechRate;
+
   /// Ajanın göreceli yolları çözdüğü ve komutları çalıştırdığı dizin.
   String get effectiveWorkspaceDir {
     final ws = workspaceDir.trim();
@@ -67,6 +73,8 @@ class SettingsState {
     this.permissionMode = PermissionMode.autoEdit,
     this.workspaceDir = '',
     this.wakeWordEnabled = false,
+    this.ttsVoice = 'female',
+    this.speechRate = 1.0,
   });
 
   bool isMcpServerEnabled(String serverName) {
@@ -95,6 +103,8 @@ class SettingsState {
     PermissionMode? permissionMode,
     String? workspaceDir,
     bool? wakeWordEnabled,
+    String? ttsVoice,
+    double? speechRate,
   }) {
     return SettingsState(
       useGpuForStt: useGpuForStt ?? this.useGpuForStt,
@@ -117,6 +127,8 @@ class SettingsState {
       permissionMode: permissionMode ?? this.permissionMode,
       workspaceDir: workspaceDir ?? this.workspaceDir,
       wakeWordEnabled: wakeWordEnabled ?? this.wakeWordEnabled,
+      ttsVoice: ttsVoice ?? this.ttsVoice,
+      speechRate: speechRate ?? this.speechRate,
     );
   }
 }
@@ -168,6 +180,8 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
           permissionMode: permissionModeFromName(prefs.getString('permissionMode')),
           workspaceDir: prefs.getString('workspaceDir') ?? '',
           wakeWordEnabled: prefs.getBool('wakeWordEnabled') ?? false,
+          ttsVoice: prefs.getString('ttsVoice') ?? 'female',
+          speechRate: prefs.getDouble('speechRate') ?? 1.0,
         )) {
     try {
       McpService.instance.loadConfig(state.mcpConfigPath);
@@ -182,6 +196,17 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   void setPermissionMode(PermissionMode mode) {
     state = state.copyWith(permissionMode: mode);
     prefs.setString('permissionMode', mode.name);
+  }
+
+  void setTtsVoice(String v) {
+    state = state.copyWith(ttsVoice: v);
+    prefs.setString('ttsVoice', v);
+  }
+
+  void setSpeechRate(double v) {
+    final r = v.clamp(0.8, 1.3).toDouble();
+    state = state.copyWith(speechRate: r);
+    prefs.setDouble('speechRate', r);
   }
 
   void setWakeWordEnabled(bool v) {

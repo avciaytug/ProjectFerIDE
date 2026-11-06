@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  FerIDE Beta v5.3.6 — macOS (Apple Silicon Metal & Intel) Otonom Kurulum
+#  FerIDE Beta v5.3.7 — macOS (Apple Silicon Metal & Intel) Otonom Kurulum
 #  Finder üzerinden çift tıklanarak veya Terminal'den çalıştırılabilir.
 # ==============================================================================
 set -u
@@ -14,7 +14,7 @@ FERIDE_HOME="$HOME/.feride"
 mkdir -p "$FERIDE_HOME"/{models,models/mmproj,aegis,skills,todos,Chats,logs,bin/llama-cpp,tmp}
 
 echo "================================================================"
-echo "  FerIDE Beta v5.3.6 — macOS Otonom Kurulum Sihirbazı           "
+echo "  FerIDE Beta v5.3.7 — macOS Otonom Kurulum Sihirbazı           "
 echo "  Konum: $APP_DIR"
 echo "================================================================"
 
@@ -59,6 +59,8 @@ fi
 if [ -x "$VENV_DIR/bin/pip" ]; then
   "$VENV_DIR/bin/pip" install --quiet --upgrade pip wheel 2>/dev/null || true
   "$VENV_DIR/bin/pip" install --quiet -r "$APP_DIR/requirements.txt" || true
+  # Feride kadın sesi (Ahenk Cep, yerel)
+  "$VENV_DIR/bin/python3" "$APP_DIR/scripts/setup_voice.py" || echo "[!] Kadın ses kurulamadı; erkek ses kullanılacak."
 fi
 
 # 5. macOS Apple Metal llama-server Otonom Kurulumu
@@ -102,6 +104,6 @@ fi
 
 echo ""
 echo "================================================================"
-echo "  🎉 FerIDE Beta v5.3.6 macOS Kurulumu Tamamlandı!              "
+echo "  🎉 FerIDE Beta v5.3.7 macOS Kurulumu Tamamlandı!              "
 echo "  Başlatmak için 'baslat_macos.command' dosyasına çift tıklayın."
 echo "================================================================"

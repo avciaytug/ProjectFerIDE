@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Autonomous = $false,
     [switch]$Launch = $false
 )
@@ -18,7 +18,7 @@ foreach ($sd in $SubDirs) {
 }
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  FerIDE Beta v5.3.6 — Windows Otonom Kurulum Sihirbazı         " -ForegroundColor Cyan
+Write-Host "  FerIDE Beta v5.3.7 — Windows Otonom Kurulum Sihirbazı         " -ForegroundColor Cyan
 Write-Host "  Konum: $AppDir" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
@@ -89,6 +89,9 @@ if (!(Test-Path $VenvPy) -and (Test-RealPython)) {
 if (Test-Path $VenvPy) {
     & $VenvPy -m pip install --quiet --upgrade pip wheel
     & $VenvPy -m pip install --quiet -r (Join-Path $AppDir "requirements.txt")
+    # Feride kadın sesi (Ahenk Cep, yerel)
+    & $VenvPy (Join-Path $AppDir "scripts\setup_voice.py")
+    if ($LASTEXITCODE -ne 0) { Write-Host "  [!] Kadın ses kurulamadı; erkek ses kullanılacak." -ForegroundColor Yellow }
     Write-Host "  [OK] Python kütüphaneleri ve çevrimdışı Whisper STT hazır." -ForegroundColor Green
 } else {
     Write-Host "  [!] Python bulunamadı; lütfen python.org üzerinden Python 3.11+ kurup kurulum_windows.bat betiğini tekrar çalıştırın." -ForegroundColor Yellow
@@ -100,7 +103,7 @@ $LlamaDir = Join-Path $FerideHome "bin\llama-cpp"
 $LlamaExe = Join-Path $LlamaDir "llama-server.exe"
 if (!(Test-Path $LlamaExe)) {
     try {
-        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5" -Headers @{ "User-Agent" = "FerIDE-5.3.6" }
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5" -Headers @{ "User-Agent" = "FerIDE-5.3.7" }
         $ChosenAsset = $null
         foreach ($rel in $Releases) {
             foreach ($a in $rel.assets) {
@@ -150,27 +153,79 @@ if (!(Test-Path $LlamaExe)) {
 # 5. Windows Release İkilisi Kontrolü & Masaüstü Kısayolu
 Write-Host "[5/5] FerIDE Windows uygulaması ve Masaüstü kısayolu hazırlanıyor..." -ForegroundColor Blue
 $WinExe = Join-Path $AppDir "build\windows\x64\runner\Release\feride_v5_2.exe"
-if (!(Test-Path $WinExe) -and ($null -ne (Get-Command flutter -ErrorAction SilentlyContinue))) {
-    Write-Host "  -> Flutter algılandı; Windows Release paketi derleniyor..." -ForegroundColor Cyan
-    & flutter pub get
-    & flutter build windows --release
+
+function Install-FlutterToolchain {
+    # Windows .exe yalnızca Windows'ta derlenebilir: Git + Flutter SDK + VS C++ Build Tools gerekir.
+    if (-not $Autonomous) {
+        Write-Host ""
+        Write-Host "  FerIDE uygulamasını derlemek için Flutter SDK ve Visual Studio C++ Build Tools gerekiyor" -ForegroundColor Yellow
+        Write-Host "  (yaklaşık 6-8 GB indirme, bir kez yapılır)." -ForegroundColor Yellow
+        $ans = Read-Host "  Şimdi otomatik kurulsun mu? (E/h)"
+        if ($ans -match '^[hHnN]') { return $false }
+    }
+    if (-not $HasWinget) {
+        Write-Host "  [!] winget bulunamadı. Microsoft Store'dan 'Uygulama Yükleyici'yi kurup tekrar deneyin." -ForegroundColor Yellow
+        return $false
+    }
+    if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
+        winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --silent
+    }
+    Write-Host "  -> Visual Studio 2022 C++ Build Tools kuruluyor (birkaç dakika sürebilir)..." -ForegroundColor Cyan
+    winget install -e --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements `
+        --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+
+    $FlutterDir = Join-Path $env:USERPROFILE "flutter"
+    if (!(Test-Path (Join-Path $FlutterDir "bin\flutter.bat"))) {
+        Write-Host "  -> Flutter SDK (stable) indiriliyor..." -ForegroundColor Cyan
+        $base = "https://storage.googleapis.com/flutter_infra_release/releases"
+        $rel = Invoke-RestMethod "$base/releases_windows.json"
+        $cur = $rel.releases | Where-Object { $_.hash -eq $rel.current_release.stable } | Select-Object -First 1
+        $zip = Join-Path $FerideHome "tmp\flutter_sdk.zip"
+        Invoke-WebRequest -Uri "$base/$($cur.archive)" -OutFile $zip -UseBasicParsing
+        Expand-Archive -LiteralPath $zip -DestinationPath $env:USERPROFILE -Force
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath -notlike "*$FlutterDir\bin*") {
+            [Environment]::SetEnvironmentVariable("Path", "$userPath;$FlutterDir\bin", "User")
+        }
+    }
+    $env:Path = "$env:Path;" + (Join-Path $env:USERPROFILE "flutter\bin") + ";" + [Environment]::GetEnvironmentVariable("Path","Machine")
+    & flutter config --enable-windows-desktop | Out-Null
+    return $true
+}
+
+if (!(Test-Path $WinExe)) {
+    $hasFlutter = $null -ne (Get-Command flutter -ErrorAction SilentlyContinue)
+    if (-not $hasFlutter) { $hasFlutter = Install-FlutterToolchain }
+    if ($hasFlutter) {
+        Write-Host "  -> Windows Release paketi derleniyor (ilk derleme 5-10 dk sürebilir)..." -ForegroundColor Cyan
+        & flutter pub get
+        & flutter build windows --release
+        if (Test-Path $WinExe) {
+            Write-Host "  [OK] FerIDE Windows uygulaması derlendi." -ForegroundColor Green
+        } else {
+            Write-Host "  [!] Derleme başarısız. 'flutter doctor' çıktısını kontrol edin." -ForegroundColor Red
+        }
+    }
+} else {
+    Write-Host "  [OK] FerIDE Windows uygulaması hazır." -ForegroundColor Green
 }
 
 try {
     $DesktopPath = [Environment]::GetFolderPath("Desktop")
-    $ShortcutFile = Join-Path $DesktopPath "FerIDE Beta v5.3.6.lnk"
+    $ShortcutFile = Join-Path $DesktopPath "FerIDE Beta v5.3.7.lnk"
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($ShortcutFile)
     $Shortcut.TargetPath = Join-Path $AppDir "baslat_windows.bat"
     $Shortcut.WorkingDirectory = $AppDir
-    $Shortcut.Description = "FerIDE Beta v5.3.6 - Otonom Yerel Yapay Zeka IDE"
+    $Shortcut.Description = "FerIDE Beta v5.3.7 - Otonom Yerel Yapay Zeka IDE"
     $Shortcut.Save()
     Write-Host "  [OK] Masaüstü kısayolu oluşturuldu: $ShortcutFile" -ForegroundColor Green
 } catch {}
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "  FerIDE Beta v5.3.6 Windows Kurulumu Tamamlandı!               " -ForegroundColor Green
+Write-Host "  FerIDE Beta v5.3.7 Windows Kurulumu Tamamlandı!               " -ForegroundColor Green
 Write-Host "  Başlatmak için 'baslat_windows.bat' dosyasına çift tıklayın.  " -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Green
 

@@ -190,7 +190,7 @@ class McpService {
     final fullConfig = {
       "mcpServers": serversMap,
       "updatedAt": DateTime.now().toIso8601String(),
-      "ferideVersion": "5.3.6",
+      "ferideVersion": "5.3.7",
     };
 
     const encoder = JsonEncoder.withIndent("  ");

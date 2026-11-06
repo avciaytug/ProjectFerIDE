@@ -28,10 +28,14 @@ void main() {
       final vm = VoiceManager();
       // TTS sunucusu kapalıysa hata yutulsun, kuyruk davranışı test edilsin
       vm.queueSentence('Merhaba.');
-      await Future.delayed(const Duration(milliseconds: 50));
-      // Kuyruk işlemeye başlamış olmalı
+      // Kuyruk işlemeye hemen (eşzamanlı olarak) başlamış olmalı
       expect(vm.state.isSpeaking, true);
-      vm.clearQueue();
+      // Sunucu yoksa bile kuyruk takılmadan bitmeli
+      for (var i = 0; i < 100 && vm.state.isSpeaking; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      expect(vm.state.isSpeaking, false);
+      expect(vm.pendingQueueCount, 0);
     });
 
     test('clearQueue: bekleyen cümleler temizlenir, isSpeaking false olur', () async {

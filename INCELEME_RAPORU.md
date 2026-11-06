@@ -1,5 +1,41 @@
 # FerIDE inceleme ve yenileme raporu
 
+## v5.3.7 — Feride'nin kadın sesi, ses seçimi ve Windows/macOS hazırlığı
+
+**Kadın sesi (varsayılan): Feride — Ahenk Cep.** Tasarlanmış sentetik bir Türkçe kadın sesi; gerçek bir kişiye ait değil.
+- 8,6M parametre, 48 kHz, tamamen yerel, CC BY 4.0.
+- Ölçümler (bu makinede, işlemcide):
+  - 3,6–5 saniyelik cümle 0,3–0,5 saniyede üretiliyor (gerçek zamandan 10–15 kat hızlı).
+  - Whisper'a geri dinletildiğinde cümleler birebir anlaşılıyor.
+  - Sayılar, saatler ve para birimleri doğal okunuyor ("14:30", "2.500 TL").
+- Kurulum: `scripts/setup_voice.py`. Model dosyaları yayınlanmış SHA-256 özetleriyle doğrulanıyor; özet tutmazsa kurulmuyor. Bütün kurulum betiklerine bağlandı.
+
+**Neden Piper kadın sesi değil?** Resmî Piper deposunda Türkçe kadın sesi yok. Ayrıca mevcut erkek ses (fahrettin), sahiplerinin talebiyle resmî depodan kaldırılmış; dağıtırken bu lisans durumu göz önünde bulundurulmalı.
+
+**Tek ses sunucusu** (`scripts/tts_server.py`):
+- Kadın ve erkek sesi birlikte sunuyor; istenen ses yoksa diğerine düşüyor.
+- Flask bağımlılığı kalktı. Chunked istekleri de destekliyor.
+- Dosya adlarını doğal okuyor ("rapor nokta PDF").
+- Kaldırılanlar:
+  - XTTS: Python 3.14'te çalışmıyordu.
+  - Edge TTS: buluta bağlanıyordu, "tamamen yerel" ilkesine aykırıydı.
+  - Her başlatmada arayüzü bloke eden XTTS denetimi.
+
+**Ayarlar > Genel > Ses ve Konuşma:**
+- Kadın / Erkek seçimi (varsayılan kadın).
+- Konuşma hızı (0,8–1,3×).
+- "Sesi dinle" önizlemesi.
+- Kadın ses kurulu değilse uyarı.
+
+**Akıcılık.** Bir cümle çalarken bir sonraki önceden sentezleniyor, cümleler arasındaki boşluk kalktı. Sesli asistanın akışı: "Feride, …" ile uyanma → komutu işleme → onayları sesle sorma → sözünü kesme.
+
+**Windows/macOS.** Ayrıntılar `WINDOWS_MACOS.md` dosyasında.
+- `kurulum.ps1` Windows PowerShell 5.1'de hiç çalışmıyordu (BOM'suz UTF-8'deki "—"). Düzeltildi; `.bat` dosyaları CRLF'e çevrildi.
+- Windows kurulumu gerekirse Flutter, VS Build Tools ve Git'i kendisi kurup `.exe`'yi derliyor.
+- Üç platformu bulutta derleyen bir GitHub Actions iş akışı eklendi.
+
+---
+
 ## v5.3.6 — Sesli iletişim neden çalışmıyordu ve nasıl düzeltildi
 
 Python ses servisleri (Piper TTS, Whisper STT) kendi başlarına kusursuzdu: ses üretimi 0,12 sn, deşifre 0,6 sn. Sorun bu servisleri birbirine bağlayan katmandaydı. Birbirine eklenen dört neden vardı:

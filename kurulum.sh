@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  FerIDE Beta v5.3.6 — Tam Otonom Kurulum, Bağımlılık ve Onarım Sihirbazı
+#  FerIDE Beta v5.3.7 — Tam Otonom Kurulum, Bağımlılık ve Onarım Sihirbazı
 #  Sıfırdan formatlanmış Ubuntu / Kubuntu / Debian / Fedora / Arch sistemlerde
 #  tek tıkla veya terminalden tüm bağımlılıkları kurar, izinleri ve sembolik
 #  bağları onarır, gömülü llama.cpp + mmproj + LibreDWG + Python ortamını
@@ -62,7 +62,7 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 err()   { echo -e "${RED}[✗]${NC} $*"; }
 
 echo -e "${BLUE}================================================================${NC}"
-echo -e "${BLUE}   FerIDE Beta v5.3.6 — Otonom Sistem Kurulum Sihirbazı         ${NC}"
+echo -e "${BLUE}   FerIDE Beta v5.3.7 — Otonom Sistem Kurulum Sihirbazı         ${NC}"
 echo -e "${BLUE}   Konum: ${APP_DIR}${NC}"
 echo -e "${BLUE}================================================================${NC}"
 echo ""
@@ -358,6 +358,12 @@ if [ -x "$VENV_DIR/bin/pip" ] && [ -f "$APP_DIR/requirements.txt" ]; then
   else
     warn "Bazı Python paketleri çevrimdışı ortam nedeniyle atlandı; internet olduğunda Ayarlar'dan onarabilirsiniz."
   fi
+  # Feride kadın sesi (Ahenk Cep, yerel). Başarısız olursa erkek ses kullanılır.
+  if "$VENV_DIR/bin/python3" "$APP_DIR/scripts/setup_voice.py"; then
+    ok "Feride kadın sesi (Ahenk Cep) hazır."
+  else
+    warn "Kadın ses kurulamadı; erkek ses kullanılacak. Sonra: $VENV_DIR/bin/python3 scripts/setup_voice.py"
+  fi
 fi
 
 # LibreDWG kontrolü
@@ -395,7 +401,7 @@ mkdir -p "$APP_MENU_DIR"
 DESKTOP_CONTENT="[Desktop Entry]
 Version=1.0
 Type=Application
-Name=FerIDE Beta v5.3.6
+Name=FerIDE Beta v5.3.7
 GenericName=Otonom Yerel Yapay Zeka IDE
 Comment=Otonom Yerel Yapay Zeka Asistanı ve Evrensel Dosya Stüdyosu
 Exec=\"$APP_DIR/run.sh\"
@@ -413,7 +419,7 @@ chmod +x "$APP_MENU_DIR/feride.desktop"
 PORTABLE_DESKTOP_CONTENT="[Desktop Entry]
 Version=1.0
 Type=Application
-Name=FerIDE Beta v5.3.6
+Name=FerIDE Beta v5.3.7
 GenericName=Otonom Yerel Yapay Zeka IDE
 Comment=Otonom Yerel Yapay Zeka Asistanı ve Evrensel Dosya Stüdyosu
 Exec=sh -c 'DIR=\"\$(cd \"\$(dirname \"\$1\")\" && pwd)\" && exec \"\$DIR/run.sh\"' -- %k
@@ -449,9 +455,9 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$
 
 echo ""
 echo -e "${GREEN}================================================================${NC}"
-echo -e "${GREEN}   🎉 FerIDE Beta v5.3.6 Kurulumu Başarıyla Tamamlandı!          ${NC}"
+echo -e "${GREEN}   🎉 FerIDE Beta v5.3.7 Kurulumu Başarıyla Tamamlandı!          ${NC}"
 echo -e "${GREEN}================================================================${NC}"
-echo -e "  • Uygulamayı masaüstündeki ${BLUE}FerIDE Beta v5.3.6${NC} simgesinden veya"
+echo -e "  • Uygulamayı masaüstündeki ${BLUE}FerIDE Beta v5.3.7${NC} simgesinden veya"
 echo -e "    klasör içindeki ${BLUE}baslat.sh${NC} / ${BLUE}run.sh${NC} dosyasına tıklayarak açabilirsiniz."
 echo -e "  • Model Merkezi'nden dilediğiniz GGUF modelini tek tıkla indirebilirsiniz."
 echo -e "  • Ayarlar > Genel sekmesinden llama.cpp ve sistem bileşenlerini her zaman"

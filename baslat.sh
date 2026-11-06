@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FerIDE Beta v5.3.6 — Hızlı Başlatıcı
+# FerIDE Beta v5.3.7 — Hızlı Başlatıcı
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 chmod +x "$DIR/run.sh" 2>/dev/null || true
 exec "$DIR/run.sh" "$@"

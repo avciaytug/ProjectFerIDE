@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FerIDE Universal File, Office, PDF, Image, Audio & AutoCAD Studio (v5.3.6)
+FerIDE Universal File, Office, PDF, Image, Audio & AutoCAD Studio (v5.3.7)
 ==========================================================================
 Creates, edits, converts, and exports:
 - Word (.docx)

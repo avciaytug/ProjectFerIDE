@@ -188,7 +188,7 @@ class DownloadTask {
   }
 }
 
-/// Çift Motorlu Kusursuz Model İndirici (v5.3.6):
+/// Çift Motorlu Kusursuz Model İndirici (v5.3.7):
 /// 1. Birincil Motor: `aria2c` (16x çoklu bağlantı, kaldığı yerden devam).
 /// 2. Yerleşik Yedek Motor: Saf Dart Resumable HTTP Stream Motoru (0 dış paketle her dağıtımda çalışır).
 /// 3. Tamamlandığında modeli (ve varsa mmproj görsel eklentisini) otomatik entegre eder ve seçer.
@@ -394,7 +394,7 @@ class DownloadController extends StateNotifier<DownloadTask?> {
         '--check-certificate=true',
         '--max-tries=5',
         '--retry-wait=2',
-        '--user-agent=FerIDE/5.3.6',
+        '--user-agent=FerIDE/5.3.7',
         if (hfToken.isNotEmpty) '--header=Authorization: Bearer $hfToken',
         '-d', destDir,
         '-o', destFileName,
@@ -503,7 +503,7 @@ class DownloadController extends StateNotifier<DownloadTask?> {
       _httpClient = HttpClient()
         ..connectionTimeout = const Duration(seconds: 25)
         ..idleTimeout = const Duration(seconds: 60)
-        ..userAgent = 'FerIDE/5.3.6';
+        ..userAgent = 'FerIDE/5.3.7';
 
       Uri currentUri = Uri.parse(url);
       HttpClientResponse? response;

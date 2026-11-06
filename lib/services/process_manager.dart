@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'app_paths.dart';
 
-/// FerIDE Çapraz Platform Ses Sunucuları Yaşam Döngüsü Yöneticisi (v5.3.6)
+/// FerIDE Çapraz Platform Ses Sunucuları Yaşam Döngüsü Yöneticisi (v5.3.7)
 ///
 /// Linux, Windows ve macOS üzerinde gömülü/yerel faster-whisper STT (port 5052),
-/// Türkçe Piper / Sistem TTS (port 5050) ve WebSocket VAD (port 5051) servislerini
+/// Türkçe kadın/erkek TTS (port 5050) ve WebSocket VAD (port 5051) servislerini
 /// otomatik başlatır, sağlık kontrolü yapar ve kapanışta temizler.
 class ProcessManager {
   ProcessManager();
@@ -21,32 +21,12 @@ class ProcessManager {
 
   static Map<String, String> get _serverEnv => AppPaths.buildSubprocessEnv(extra: {
         'HSA_OVERRIDE_GFX_VERSION': '11.0.0',
-        'COQUI_TOS_AGREED': '1',
+        'FERIDE_ROOT': AppPaths.appRoot,
       });
 
-  /// Coqui XTTS kuruluysa xtts_server.py, değilse gömülü/sistem destekli piper_tts_server.py seçer
-  static (String python, String script, String pgrep) _resolveTtsServer() {
-    final voicePy = AppPaths.resolvePython(preferVoiceEnv: true);
-    try {
-      final check = Process.runSync(
-        voicePy,
-        ['-c', 'import TTS; print("OK")'],
-        environment: _serverEnv,
-      );
-      if (check.exitCode == 0 && check.stdout.toString().contains('OK')) {
-        return (voicePy, 'xtts_server.py', 'xtts_server.py');
-      }
-    } catch (_) {}
-
-    final venvPy = AppPaths.resolvePython(preferVoiceEnv: false);
-    final piperScript = File(AppPaths.scriptPath('piper_tts_server.py'));
-    if (piperScript.existsSync()) {
-      // piper_tts_server.py hem gömülü Türkçe Piper modelini hem de macOS/Windows/Linux
-      // yerel sistem seslendiricilerini destekler.
-      return (venvPy, 'piper_tts_server.py', 'piper_tts_server.py');
-    }
-    return (venvPy, 'edge_tts_server.py', 'edge_tts_server.py');
-  }
+  /// Tek ses sunucusu: kadın (Ahenk Cep) ve erkek (Piper) sesleri birlikte sunar.
+  static (String python, String script, String pgrep) _resolveTtsServer() =>
+      (AppPaths.resolvePython(preferVoiceEnv: false), 'tts_server.py', 'tts_server.py');
 
   void _log(String line) {
     final msg = '[${DateTime.now().toIso8601String()}] $line';

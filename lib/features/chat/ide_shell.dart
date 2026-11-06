@@ -20,6 +20,8 @@ import '../../models/download_manager.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../aegis/aegis_service.dart';
 import '../../services/system_installer_service.dart';
+import '../../services/voice_manager.dart';
+import '../../services/process_manager.dart';
 
 
 class IdeShell extends ConsumerStatefulWidget {
@@ -534,7 +536,7 @@ class _IdeShellState extends ConsumerState<IdeShell> {
   }
 }
 
-// Geniş Ekran Ayarlar & Model Merkezi Modalı (v5.3.6)
+// Geniş Ekran Ayarlar & Model Merkezi Modalı (v5.3.7)
 class SettingsDialogWidget extends ConsumerStatefulWidget {
   const SettingsDialogWidget({super.key});
 
@@ -562,7 +564,7 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
   Map<String, String> _hfHeaders() {
     final token = ref.read(settingsProvider).hfToken.trim();
     return {
-      'User-Agent': 'FerIDE-5.3.6',
+      'User-Agent': 'FerIDE-5.3.7',
       if (token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
@@ -1526,6 +1528,13 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
                           'Otonom Sistem, Llama.cpp & Evrensel Dosya Motoru', textColor),
                       _buildAutonomousSystemInstallerCard(
                           isLight, textColor, secondaryTextColor),
+                      const SizedBox(height: 20),
+                      _buildSectionTitle(Icons.record_voice_over_rounded,
+                          'Ses ve Konuşma', textColor),
+                      _buildGlassCard(
+                        isLight: isLight,
+                        child: _VoiceSettingsCard(textColor: textColor, secondaryTextColor: secondaryTextColor),
+                      ),
                       const SizedBox(height: 20),
                       _buildSectionTitle(Icons.settings,
                           'Ajan Davranışı & Bağlantı', textColor),
@@ -3303,7 +3312,7 @@ class FloatingDownloadBar extends ConsumerWidget {
 
 
 /// Uygulama sürümü (başlık, pencere adı ve hakkında bilgisi tek yerden).
-const String kFerideVersion = 'v5.3.6';
+const String kFerideVersion = 'v5.3.7';
 
 /// Başlıktaki izin modu rozeti: güvenlik seviyesini her an görünür kılar.
 class _PermissionChip extends ConsumerWidget {
@@ -3386,5 +3395,117 @@ class _WakeChip extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+
+/// Yerel ses sunucusundaki kurulu sesler (kadın/erkek).
+final ttsVoicesProvider = FutureProvider.autoDispose<Map<String, bool>>((ref) async {
+  await ProcessManager.instance.startAll();
+  for (var i = 0; i < 40; i++) {
+    try {
+      final res = await Dio().get('http://127.0.0.1:5050/health',
+          options: Options(receiveTimeout: const Duration(seconds: 2), sendTimeout: const Duration(seconds: 2)));
+      final v = (res.data is Map ? res.data['voices'] : null) as Map?;
+      if (v != null) return {'female': v['female'] == true, 'male': v['male'] == true};
+    } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 500));
+  }
+  return const {};
+});
+
+/// Ayarlar > Genel > Ses ve Konuşma
+class _VoiceSettingsCard extends ConsumerWidget {
+  final Color textColor;
+  final Color secondaryTextColor;
+  const _VoiceSettingsCard({required this.textColor, required this.secondaryTextColor});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(settingsProvider);
+    final voices = ref.watch(ttsVoicesProvider);
+    final femaleMissing = voices.maybeWhen(data: (v) => v.isNotEmpty && v['female'] != true, orElse: () => false);
+
+    Widget option(String value, String title, String subtitle, IconData icon) {
+      final selected = settings.ttsVoice == value;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => ref.read(settingsProvider.notifier).setTtsVoice(value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: selected ? IdePalette.accentSoft.withValues(alpha: 0.14) : Colors.transparent,
+              border: Border.all(
+                  color: selected ? IdePalette.accentSoft : secondaryTextColor.withValues(alpha: 0.3),
+                  width: selected ? 1.6 : 1),
+            ),
+            child: Row(children: [
+              Icon(icon, color: selected ? IdePalette.accentSoft : secondaryTextColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: TextStyle(color: textColor, fontWeight: FontWeight.w600, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: TextStyle(color: secondaryTextColor, fontSize: 12)),
+                ]),
+              ),
+              if (selected) const Icon(Icons.check_circle_rounded, color: IdePalette.accentSoft, size: 20),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('FerIDE\'nin sesi', style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 14)),
+      const SizedBox(height: 4),
+      Text('Tüm sesler bu bilgisayarda üretilir; internete hiçbir şey gönderilmez.',
+          style: TextStyle(color: secondaryTextColor, fontSize: 12)),
+      const SizedBox(height: 12),
+      Row(children: [
+        option('female', 'Kadın — Feride', 'Doğal Türkçe kadın sesi (Ahenk Cep)', Icons.face_3_rounded),
+        const SizedBox(width: 12),
+        option('male', 'Erkek — Fahrettin', 'Türkçe erkek sesi (Piper)', Icons.face_rounded),
+      ]),
+      if (femaleMissing && settings.ttsVoice == 'female') ...[
+        const SizedBox(height: 10),
+        Row(children: [
+          const Icon(Icons.info_outline_rounded, size: 16, color: Color(0xFFF59E0B)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Kadın ses modeli bu bilgisayarda henüz kurulu değil; şimdilik erkek ses kullanılıyor. '
+              'Kurmak için: python3 scripts/setup_voice.py',
+              style: TextStyle(color: secondaryTextColor, fontSize: 12),
+            ),
+          ),
+        ]),
+      ],
+      const SizedBox(height: 16),
+      Row(children: [
+        Text('Konuşma hızı', style: TextStyle(color: textColor, fontWeight: FontWeight.w600, fontSize: 13)),
+        Expanded(
+          child: Slider(
+            value: settings.speechRate,
+            min: 0.8,
+            max: 1.3,
+            divisions: 10,
+            label: '${settings.speechRate.toStringAsFixed(2)}×',
+            onChanged: (v) => ref.read(settingsProvider.notifier).setSpeechRate(v),
+          ),
+        ),
+        Text('${settings.speechRate.toStringAsFixed(2)}×', style: TextStyle(color: secondaryTextColor, fontSize: 12)),
+        const SizedBox(width: 12),
+        FilledButton.tonalIcon(
+          onPressed: () => ref.read(voiceManagerProvider.notifier).speak(
+              'Merhaba, ben Feride. Bilgisayarında senin için dosya açabilir, araştırma yapabilir ve işlerini halledebilirim.'),
+          icon: const Icon(Icons.play_arrow_rounded, size: 18),
+          label: const Text('Sesi dinle'),
+        ),
+      ]),
+    ]);
   }
 }

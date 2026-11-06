@@ -8,10 +8,22 @@ import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'app_paths.dart';
 import 'audio_out.dart';
+import '../features/settings/settings_provider.dart';
 import 'process_manager.dart';
 
 final voiceManagerProvider = StateNotifierProvider<VoiceManager, VoiceState>((ref) {
-  return VoiceManager();
+  final vm = VoiceManager();
+  // Ses seçimi ve hızı ayarlardan anlık olarak izlenir.
+  try {
+    final s = ref.read(settingsProvider);
+    vm.voice = s.ttsVoice;
+    vm.speechRate = s.speechRate;
+    ref.listen(settingsProvider, (_, n) {
+      vm.voice = n.ttsVoice;
+      vm.speechRate = n.speechRate;
+    });
+  } catch (_) {}
+  return vm;
 });
 
 class VoiceState {
@@ -97,6 +109,10 @@ String _lastProcessManagerLogLine() {
 
 class VoiceManager extends StateNotifier<VoiceState> {
   VoiceManager() : super(VoiceState());
+
+  /// 'female' (Feride) veya 'male'.
+  String voice = 'female';
+  double speechRate = 1.0;
 
   static final HttpClient _httpClient = HttpClient()
     ..connectionTimeout = const Duration(seconds: 8)
@@ -461,7 +477,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
 
   void queueSentence(String sentence) {
     final s = sentence.trim();
-    if (s.length < 3) return;
+    if (s.length < 2) return;
     _ttsQueue.add(s);
     state = state.copyWith(pendingQueueCount: _ttsQueue.length);
     if (!_isProcessingQueue) {
@@ -469,27 +485,29 @@ class VoiceManager extends StateNotifier<VoiceState> {
     }
   }
 
+  /// Cümleleri sırayla seslendirir. Bir cümle çalarken bir sonrakinin sesi
+  /// önceden üretilir; böylece cümleler arasında boşluk oluşmaz.
   Future<void> _processQueue() async {
     if (_isProcessingQueue) return;
     _isProcessingQueue = true;
     state = state.copyWith(isSpeaking: true, pendingQueueCount: _ttsQueue.length);
-    final sw = Stopwatch()..start();
-    final currentGen = _ttsSessionGen;
-
+    final gen = _ttsSessionGen;
+    Future<File?>? next;
     try {
-      while (_ttsQueue.isNotEmpty && currentGen == _ttsSessionGen) {
-        final sentence = _ttsQueue.removeAt(0);
-        state = state.copyWith(pendingQueueCount: _ttsQueue.length);
-        await _speakSingle(sentence, manageSpeaking: false, expectedGen: currentGen);
-        if (_ttsQueue.isNotEmpty && currentGen == _ttsSessionGen) {
-          await Future.delayed(const Duration(milliseconds: 100));
+      while ((_ttsQueue.isNotEmpty || next != null) && gen == _ttsSessionGen) {
+        final current = next ?? _synthesize(_ttsQueue.removeAt(0), gen);
+        next = null;
+        final file = await current;
+        if (_ttsQueue.isNotEmpty && gen == _ttsSessionGen) {
+          next = _synthesize(_ttsQueue.removeAt(0), gen); // ön yükleme
         }
-      }
-      if (sw.elapsedMilliseconds < 300) {
-        await Future.delayed(Duration(milliseconds: 300 - sw.elapsedMilliseconds));
+        state = state.copyWith(pendingQueueCount: _ttsQueue.length + (next != null ? 1 : 0));
+        if (file != null && gen == _ttsSessionGen) await _audio.play(file.path);
+        _deleteQuietly(file);
       }
     } finally {
-      if (currentGen == _ttsSessionGen) {
+      if (next != null) _deleteQuietly(await next);
+      if (gen == _ttsSessionGen) {
         _isProcessingQueue = false;
         state = state.copyWith(isSpeaking: false, pendingQueueCount: _ttsQueue.length);
       }
@@ -504,74 +522,60 @@ class VoiceManager extends StateNotifier<VoiceState> {
     state = state.copyWith(isSpeaking: false, pendingQueueCount: 0);
   }
 
-  Future<void> speak(String text) => _speakSingle(text);
-
-  Future<void> _speakSingle(String text, {bool manageSpeaking = true, int? expectedGen}) async {
-    if (expectedGen != null && expectedGen != _ttsSessionGen) return;
-    if (manageSpeaking) state = state.copyWith(isSpeaking: true);
-    File? tempFile;
+  /// Tek bir metni seslendirir (kuyruğu kullanmadan).
+  Future<void> speak(String text) async {
+    final gen = _ttsSessionGen;
+    state = state.copyWith(isSpeaking: true);
     try {
-      String cleanText = text;
-      cleanText = cleanText.replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'<tool_call>[\s\S]*?</tool_call>'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'\{[^}]*\}'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'\[[^\]]*\]'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'```[\s\S]*?```'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'`[^`]+`'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'\*+'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'#+\s*'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'https?://\S+'), '');
-      cleanText = cleanText.replaceAll(RegExp(r'[<>{}()\[\]|\\/@#\$%^&=+~]'), ' ');
-      cleanText = cleanText.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final f = await _synthesize(text, gen);
+      if (f != null && gen == _ttsSessionGen) await _audio.play(f.path);
+      _deleteQuietly(f);
+    } finally {
+      state = state.copyWith(isSpeaking: false);
+    }
+  }
 
-      if (cleanText.length < 3) {
-        if (manageSpeaking) state = state.copyWith(isSpeaking: false);
-        return;
-      }
+  static void _deleteQuietly(File? f) {
+    if (f == null) return;
+    f.delete().catchError((_) => f);
+  }
 
-      if (!Platform.environment.containsKey('FLUTTER_TEST') &&
-          !ProcessManager.instance.isRunning('tts')) {
+  /// Metni yerel TTS sunucusunda WAV'a çevirir; başarısızsa null.
+  Future<File?> _synthesize(String text, int gen) async {
+    final clean = text
+        .replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '')
+        .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (clean.length < 2 || gen != _ttsSessionGen) return null;
+    try {
+      if (!Platform.environment.containsKey('FLUTTER_TEST') && !ProcessManager.instance.isRunning('tts')) {
         unawaited(ProcessManager.instance.startAll());
       }
-
-      final request = await _httpClient
-          .postUrl(Uri.parse('http://127.0.0.1:5050/tts'))
-          .timeout(const Duration(seconds: 10));
+      final request = await _httpClient.postUrl(Uri.parse('http://127.0.0.1:5050/tts')).timeout(const Duration(seconds: 10));
       request.headers.set('Content-Type', 'application/json');
-      final payload = utf8.encode(jsonEncode({'text': cleanText, 'language': 'tr'}));
+      final payload = utf8.encode(jsonEncode({'text': clean, 'voice': voice, 'speed': speechRate}));
       request.headers.set('Content-Length', payload.length.toString());
       request.add(payload);
-
-      final response = await request.close().timeout(const Duration(seconds: 30));
-      if (response.statusCode == 200) {
-        final audioBytes = await response.fold<List<int>>([], (prev, element) => prev..addAll(element));
-        if (expectedGen != null && expectedGen != _ttsSessionGen) return;
-
-        Directory tempDir;
-        try {
-          tempDir = await getTemporaryDirectory();
-        } catch (_) {
-          tempDir = Directory.systemTemp;
-        }
-        final ts = DateTime.now().microsecondsSinceEpoch;
-        tempFile = File(p.join(tempDir.path, 'feride_tts_$ts.wav'));
-        await tempFile.writeAsBytes(audioBytes);
-
-        if (audioBytes.length > 1000 && (expectedGen == null || expectedGen == _ttsSessionGen)) {
-          await _audio.play(tempFile.path);
-        }
+      final response = await request.close().timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) {
+        await response.drain<void>();
+        return null;
       }
+      final bytes = await response.fold<List<int>>([], (a, b) => a..addAll(b));
+      if (bytes.length < 1000 || gen != _ttsSessionGen) return null;
+      Directory tempDir;
+      try {
+        tempDir = await getTemporaryDirectory();
+      } catch (_) {
+        tempDir = Directory.systemTemp;
+      }
+      final f = File(p.join(tempDir.path, 'feride_tts_${DateTime.now().microsecondsSinceEpoch}.wav'));
+      await f.writeAsBytes(bytes, flush: true);
+      return f;
     } catch (e) {
-      state = state.copyWith(lastError: 'TTS Hatası: $e');
-    } finally {
-      if (manageSpeaking) {
-        state = state.copyWith(isSpeaking: false);
-      }
-      if (tempFile != null) {
-        try {
-          if (await tempFile.exists()) await tempFile.delete();
-        } catch (_) {}
-      }
+      state = state.copyWith(lastError: 'Ses üretilemedi: $e');
+      return null;
     }
   }
 

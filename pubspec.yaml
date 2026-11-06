@@ -1,7 +1,7 @@
 name: feride_v5_2
-description: "FerIDE Beta v5.3.6 — Autonomous Local AI IDE & Universal File/CAD Studio"
+description: "FerIDE Beta v5.3.7 — Autonomous Local AI IDE & Universal File/CAD Studio"
 publish_to: 'none'
-version: 5.3.6-beta+1
+version: 5.3.7-beta+1
 
 environment:
   sdk: ^3.5.0
