@@ -84,7 +84,18 @@ def main():
                 "Inference code ahenk_cep.py: Apache-2.0. Base model EMA Lightning: Apache-2.0.\n"
                 "Synthetic designed voice (f022); not a real person's voice.\n")
 
-    # 3) Deneme
+    # 3) Konuşma tanıma modeli (Whisper small) — çalışma anında ağ kullanılmasın diye şimdi indirilir
+    try:
+        from faster_whisper import WhisperModel
+
+        cache = os.path.join(os.path.expanduser("~"), ".feride", "cache", "whisper")
+        os.makedirs(cache, exist_ok=True)
+        WhisperModel("small", device="cpu", compute_type="int8", download_root=cache)
+        print("✓ Whisper (small) konuşma tanıma modeli hazır")
+    except Exception as e:  # noqa: BLE001
+        print(f"! Whisper small indirilemedi ({e}); gömülü 'base' modeli kullanılacak")
+
+    # 4) Deneme
     sys.path.insert(0, DEST)
     from ahenk_cep import AhenkCep
 

@@ -17,6 +17,9 @@ API:
 Hiçbir istek bilgisayarın dışına çıkmaz.
 """
 
+import os as _os
+_os.environ.setdefault("HF_HUB_OFFLINE", "1")  # çalışma anında ağ yok: modeller yalnızca kurulumda iner
+_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import io
 import json
 import logging

@@ -22,6 +22,9 @@ class ProcessManager {
   static Map<String, String> get _serverEnv => AppPaths.buildSubprocessEnv(extra: {
         'HSA_OVERRIDE_GFX_VERSION': '11.0.0',
         'FERIDE_ROOT': AppPaths.appRoot,
+        // Ses sunucuları çalışırken asla ağa çıkmaz: modeller yalnızca kurulumda iner.
+        'HF_HUB_OFFLINE': '1',
+        'TRANSFORMERS_OFFLINE': '1',
       });
 
   /// Tek ses sunucusu: kadın (Ahenk Cep) ve erkek (Piper) sesleri birlikte sunar.

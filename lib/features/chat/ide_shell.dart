@@ -50,7 +50,6 @@ class _IdeShellState extends ConsumerState<IdeShell> {
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeProvider);
     final isSidebarOpen = ref.watch(isSidebarOpenProvider);
-    final isLight = themeMode == ThemeMode.light;
 
     // Not: main.dart'ta zaten MaterialApp var → burada iç (nested) MaterialApp
     // yerine Theme kullanıyoruz. Nested MaterialApp, testte iki MaterialApp
@@ -88,18 +87,6 @@ class _IdeShellState extends ConsumerState<IdeShell> {
             children: [
               _buildFerIdeHeader(),
               const Divider(height: 1, color: IdePalette.glassBorder),
-              Consumer(
-                builder: (context, ref, _) {
-                  final activeDl = ref.watch(downloadControllerProvider);
-                  if (activeDl != null && activeDl.status != DownloadStatus.canceled) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      child: FloatingDownloadBar(download: activeDl, isLight: isLight),
-                    );
-                  }
-                  return const SizedBox.shrink();
-                },
-              ),
               Expanded(
                 child: Row(
                   children: [
@@ -2782,28 +2769,7 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
       Color secondaryTextColor,
       {bool isLocal = false, String? modelUrl}) {
     final activeDownload = ref.watch(downloadControllerProvider);
-    final dlName = activeDownload?.fileName ?? '';
-    final dlBase =
-        RegExp(r'-(\d{4,})-of-(\d{4,})\.gguf$', caseSensitive: false)
-                .firstMatch(dlName) !=
-            null
-        ? RegExp(r'-(\d{4,})-of-(\d{4,})\.gguf$', caseSensitive: false)
-            .firstMatch(dlName)!
-            .group(0)!
-            .split('-of-')[0]
-            .replaceFirst(RegExp(r'-\d{4,}$'), '')
-        : dlName;
-    final isThisDownloading = activeDownload != null &&
-        (activeDownload.modelId.toLowerCase() == name.toLowerCase() ||
-            dlName.toLowerCase() == name.toLowerCase() ||
-            dlBase.toLowerCase() == name.toLowerCase() ||
-            dlName.toLowerCase().contains(name.toLowerCase()) ||
-            name.toLowerCase().contains(dlName.toLowerCase()) ||
-            name.toLowerCase().contains(dlBase.toLowerCase()) ||
-            (activeDownload.modelId.contains('/') &&
-                name.toLowerCase().contains(activeDownload.modelId.split('/').last.toLowerCase())) ||
-            (name.contains('/') &&
-                activeDownload.modelId.toLowerCase().contains(name.split('/').last.toLowerCase())));
+    final isThisDownloading = activeDownload != null && isDownloadFor(activeDownload, name, isLocal: isLocal);
 
     return _buildGlassCard(
       isLight: isLight,
@@ -3508,4 +3474,29 @@ class _VoiceSettingsCard extends ConsumerWidget {
       ]),
     ]);
   }
+}
+
+
+/// Model adını karşılaştırma için sadeleştirir: dosya yolu, ".gguf" ve
+/// "-00001-of-00002" gibi parça ekleri atılır, küçük harfe çevrilir.
+String modelKey(String raw) {
+  var s = raw.trim().toLowerCase().replaceAll('\\', '/');
+  s = s.split('/').last;
+  s = s.replaceFirst(RegExp(r'\.gguf$'), '');
+  s = s.replaceFirst(RegExp(r'-\d{4,}-of-\d{4,}$'), '');
+  return s;
+}
+
+/// Bir model kartının şu anki indirmeye ait olup olmadığını kesin olarak belirler.
+/// Arama kartları depo adıyla (ör. "unsloth/GLM-4.5-Air-GGUF"), yerel kartlar
+/// dosya adıyla eşleşir. Gevşek "içeriyor mu" karşılaştırması yapılmaz: eskiden
+/// bölünmüş GGUF'larda boş bir anahtar üretiliyor ve TÜM kartlar indiriliyor görünüyordu.
+bool isDownloadFor(DownloadTask d, String cardName, {required bool isLocal}) {
+  if (cardName.trim().isEmpty) return false;
+  if (!isLocal) {
+    return d.modelId.trim().toLowerCase() == cardName.trim().toLowerCase();
+  }
+  final key = modelKey(cardName);
+  if (key.isEmpty) return false;
+  return modelKey(d.fileName) == key || (d.primaryModelFile != null && modelKey(d.primaryModelFile!) == key);
 }

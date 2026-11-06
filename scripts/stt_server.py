@@ -13,6 +13,9 @@ FerIDE STT (Speech-to-Text) Sunucusu (v5.3.7 — Linux / Windows / macOS)
 3) ThreadingHTTPServer (Port 5052): /health ve /transcribe eşzamanlı çalışır.
 """
 
+import os as _os
+_os.environ.setdefault("HF_HUB_OFFLINE", "1")  # çalışma anında ağ yok: modeller yalnızca kurulumda iner
+_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import argparse
 import io
 import json

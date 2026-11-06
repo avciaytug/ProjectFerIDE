@@ -17,6 +17,9 @@ Böylece mikrofonların ürettiği DC kayması (bazı dahili AMD/Intel mikrofonl
 sürekli uyarlanır; bu yüzden ortam sessizliği hiçbir zaman "konuşma" sayılmaz.
 """
 
+import os as _os
+_os.environ.setdefault("HF_HUB_OFFLINE", "1")  # çalışma anında ağ yok: modeller yalnızca kurulumda iner
+_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import asyncio
 import io
 import json

@@ -29,6 +29,17 @@
 
 **Akıcılık.** Bir cümle çalarken bir sonraki önceden sentezleniyor, cümleler arasındaki boşluk kalktı. Sesli asistanın akışı: "Feride, …" ile uyanma → komutu işleme → onayları sesle sorma → sözünü kesme.
 
+**Gizlilik: ses bilgisayardan çıkmıyor (kanıtlandı).** TTS ve STT, ağ arayüzü olmayan izole bir Linux ağ alanında (`unshare -rn`) başlatıldı; internet erişimi doğrulanarak engellendi. Bu ortamda Feride kadın sesiyle konuştu ve Whisper cümleyi birebir yazdı. Ek güvenceler:
+- Ses sunucularına çalışma anında `HF_HUB_OFFLINE=1` kilidi konuldu; modeller yalnızca kurulumda iner. Whisper "small" modeli artık kurulumda önceden indiriliyor; eskiden çalışma anında arka planda indirilmeye çalışılıyordu.
+- Mikrofon sesi yalnızca `127.0.0.1` (bilgisayarın kendi içi) üzerinden VAD/STT'ye gider.
+- İnternete yalnızca kullanıcının istediği şu işlemlerde çıkılır: ajanın `search_web` / `read_url_content` araçları (izin moduna tabi), Model Merkezi indirmeleri ve etkinleştirilen MCP sunucuları.
+
+**Model Merkezi düzeltmesi.** Bölünmüş GGUF indirilirken (`…-00001-of-00002.gguf`) eşleştirme kodu boş bir anahtar üretiyordu; `"ad".contains("")` her zaman doğru olduğu için ilerleme çubuğu bütün kartlarda, yüklü modellerde bile görünüyordu. Eşleştirme kesinleştirildi:
+- Arama kartları birebir depo adıyla eşleşiyor.
+- Yerel kartlar normalize edilmiş dosya adıyla eşleşiyor.
+- Ana penceredeki ikinci ilerleme çubuğu kaldırıldı.
+- Testlerle doğrulandı.
+
 **Windows/macOS.** Ayrıntılar `WINDOWS_MACOS.md` dosyasında.
 - `kurulum.ps1` Windows PowerShell 5.1'de hiç çalışmıyordu (BOM'suz UTF-8'deki "—"). Düzeltildi; `.bat` dosyaları CRLF'e çevrildi.
 - Windows kurulumu gerekirse Flutter, VS Build Tools ve Git'i kendisi kurup `.exe`'yi derliyor.
