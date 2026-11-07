@@ -160,11 +160,18 @@ class McpService {
       final Map<String, dynamic> parsed = jsonDecode(content);
       final Map<String, dynamic> serversMap =
           parsed["mcpServers"] as Map<String, dynamic>? ?? {};
+      var migrated = false;
 
       _servers = serversMap.entries.map((entry) {
         final val = entry.value as Map<String, dynamic>;
-        return McpServerConfig.fromClaudeEntry(entry.key, val);
+        final raw = McpServerConfig.fromClaudeEntry(entry.key, val);
+        final cfg = migrateServer(raw);
+        if (!identical(cfg, raw)) migrated = true;
+        // Komutu bulunmayan sunucu "Hazır" görünmesin: neyin eksik olduğu gösterilir.
+        final missing = cfg.isEnabled ? missingRuntime(cfg) : null;
+        return missing == null ? cfg : cfg.copyWith(status: missing);
       }).toList();
+      if (migrated) saveConfig(_configPath);
     } catch (e) {
       if (_servers.isEmpty) {
         _servers = getRecommendedPresets();
@@ -190,7 +197,7 @@ class McpService {
     final fullConfig = {
       "mcpServers": serversMap,
       "updatedAt": DateTime.now().toIso8601String(),
-      "ferideVersion": "5.3.7",
+      "ferideVersion": "5.3.8",
     };
 
     const encoder = JsonEncoder.withIndent("  ");
@@ -390,6 +397,48 @@ class McpService {
     }
   }
 
+  static const _sqliteTools = ['read_query', 'write_query', 'create_table', 'list_tables', 'describe_table'];
+
+  /// Bilinen sorunlu yapılandırmaları düzeltir:
+  /// - Arşivlenmiş "mcp-server-sqlite" (güncel MCP/pydantic ile çalışmıyor) → yerleşik sunucu.
+  /// - Yerleşik sunucunun yolları (uygulama klasörü taşınmış olabilir) her açılışta yenilenir.
+  static McpServerConfig migrateServer(McpServerConfig c) {
+    final oldSqlite = c.args.contains('mcp-server-sqlite');
+    final builtin = c.args.isNotEmpty && c.args.first.endsWith('mcp_sqlite_server.py');
+    if (!oldSqlite && !builtin) return c;
+    var db = p.join(AppPaths.ferideDataDir, 'feride_knowledge.db');
+    final i = c.args.indexOf('--db-path');
+    if (i >= 0 && i + 1 < c.args.length) db = c.args[i + 1];
+    final python = AppPaths.resolvePython();
+    final script = AppPaths.scriptPath('mcp_sqlite_server.py');
+    if (builtin && c.command == python && c.args.first == script) return c;
+    return c.copyWith(
+      command: python,
+      args: [script, '--db-path', db],
+      tools: _sqliteTools,
+      description: oldSqlite ? 'Yerel SQLite veritabanı (FerIDE yerleşik sunucusu, bağımlılık gerektirmez).' : null,
+    );
+  }
+
+  /// Stdio sunucusunun komutu bu bilgisayarda yoksa ne kurulması gerektiğini söyler.
+  static String? missingRuntime(McpServerConfig s) {
+    if (s.transport == 'http' || s.transport == 'sse' || s.url.isNotEmpty) return null;
+    final cmd = s.command.trim().split(RegExp(r'\s+')).first;
+    if (cmd.isEmpty || resolveBinary(cmd) != null) return null;
+    final name = p.basenameWithoutExtension(cmd).toLowerCase();
+    final hint = switch (name) {
+      'npx' || 'node' || 'npm' => Platform.isWindows
+          ? 'Node.js gerekli: winget install OpenJS.NodeJS.LTS'
+          : Platform.isMacOS
+              ? 'Node.js gerekli: brew install node'
+              : 'Node.js gerekli: sudo apt install nodejs npm',
+      'uvx' || 'uv' => 'uv gerekli: Ayarlar > MCP > "uv kur" veya: pip install uv',
+      'docker' => 'Docker gerekli',
+      _ => '"$cmd" bulunamadı',
+    };
+    return 'Çalışamaz: $hint';
+  }
+
   /// node/npx/uvx gibi komutları PATH ve bilinen konumlardan bulur.
   static String? resolveBinary(String cmd) {
     if (p.isAbsolute(cmd)) return File(cmd).existsSync() ? cmd : null;
@@ -400,6 +449,8 @@ class McpService {
       if (Platform.isMacOS) '/opt/homebrew/bin',
       if (!Platform.isWindows) ...['/usr/local/bin', '/usr/bin', p.join(AppPaths.homeDir, '.local', 'bin')],
       if (Platform.isWindows) r'C:\Program Files\nodejs',
+      // FerIDE'nin Python ortamına kurulan uv/uvx
+      p.join(AppPaths.ferideDataDir, 'venv', Platform.isWindows ? 'Scripts' : 'bin'),
     ];
     final names = Platform.isWindows ? [cmd, '$cmd.cmd', '$cmd.exe', '$cmd.bat'] : [cmd];
     for (final d in dirs) {
@@ -446,13 +497,13 @@ class McpService {
       ),
       McpServerConfig(
         name: "sqlite",
-        description: "Yerel SQLite veritabanı sorgulama, tablo şeması okuma ve SQL analizi.",
+        description: "Yerel SQLite veritabanı (FerIDE yerleşik sunucusu, bağımlılık gerektirmez).",
         transport: "stdio",
-        command: "uvx",
-        args: ["mcp-server-sqlite", "--db-path", "$home/.feride/feride_knowledge.db"],
-        isEnabled: false,
-        status: "Devre Dışı",
-        tools: ["read_query", "write_query", "describe_table", "list_tables"],
+        command: AppPaths.resolvePython(),
+        args: [AppPaths.scriptPath('mcp_sqlite_server.py'), "--db-path", "$home/.feride/feride_knowledge.db"],
+        isEnabled: true,
+        status: "Hazır",
+        tools: _sqliteTools,
       ),
       McpServerConfig(
         name: "github",

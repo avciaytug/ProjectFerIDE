@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'features/settings/settings_provider.dart';
 import 'services/app_paths.dart';
+import 'aegis/aegis_service.dart';
 import 'services/process_manager.dart';
 import 'services/pty_sandbox.dart';
 import 'services/mcp_service.dart';
@@ -27,7 +28,7 @@ void main() async {
   }
 
   // ============================================================================
-  // KÜRESEL HATA AĞI (v5.3.7): Bir build/runtime hatası tüm paneli kırmızı
+  // KÜRESEL HATA AĞI (v5.3.8): Bir build/runtime hatası tüm paneli kırmızı
   // "tema" ekranına boğmasın — FerIDE tarzında okunabilir bir hata kartı
   // göstersin + hata ~/.feride/logs/feride_errors.log dosyasına yazılsın.
   // ============================================================================
@@ -48,7 +49,7 @@ void main() async {
     size: Size(1420, 880),
     minimumSize: Size(980, 640),
     center: true,
-    title: 'FerIDE Beta v5.3.7',
+    title: 'FerIDE Beta v5.3.8',
   );
   if (!kIsWeb) {
     windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -59,6 +60,14 @@ void main() async {
   }
 
   final prefs = await SharedPreferences.getInstance();
+
+  // ~/.feride/skills altındaki SKILL.md klasörlerini veritabanına aktar (eskiden
+  // bu fonksiyon hiç çağrılmıyordu; 17 skill'in yalnızca 5'i ajana görünüyordu).
+  if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
+    try {
+      AegisService.instance.syncFromDisk();
+    } catch (_) {}
+  }
 
   // Ses (STT/TTS/VAD) motorlarını açılışta arka planda ısıt; kullanıcı mikrofona
   // bastığında sıfır bekleme ile anında yazıya çevirsin.
@@ -135,7 +144,7 @@ class _FerIDEAppState extends ConsumerState<FerIDEApp> with WindowListener {
 
     return MaterialApp(
       navigatorKey: rootNavigatorKey,
-      title: 'FerIDE Beta v5.3.7',
+      title: 'FerIDE Beta v5.3.8',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       // v5.3.1: Build/runtime çöküşlerinde kırmızı "tema" ekranı yerine

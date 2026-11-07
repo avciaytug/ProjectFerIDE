@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  FerIDE Beta v5.3.7 — Tam Sistem Sağlık ve Bağımlılık Denetçisi (feride_doctor)
+#  FerIDE Beta v5.3.8 — Tam Sistem Sağlık ve Bağımlılık Denetçisi (feride_doctor)
 # ==============================================================================
 set -u
 
@@ -22,7 +22,7 @@ check_warn() { echo -e "  ${YELLOW}[!]${NC} $*"; WARN=$((WARN+1)); }
 check_fail() { echo -e "  ${RED}[✗]${NC} $*"; FAIL=$((FAIL+1)); }
 
 echo -e "${BLUE}================================================================${NC}"
-echo -e "${BLUE}   FerIDE Beta v5.3.7 — Sistem Doktoru (feride_doctor.sh)       ${NC}"
+echo -e "${BLUE}   FerIDE Beta v5.3.8 — Sistem Doktoru (feride_doctor.sh)       ${NC}"
 echo -e "${BLUE}================================================================${NC}"
 
 echo -e "\n${BLUE}1. Çekirdek Uygulama ve Çıkarım Motoru:${NC}"

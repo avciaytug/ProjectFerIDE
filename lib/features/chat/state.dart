@@ -61,6 +61,16 @@ final apiUrlProvider = Provider<String>((ref) {
   return saved;
 });
 
+/// Sunucunun bildirdiği model kimliğini (tam yol olabilir) model listesindeki ada çevirir:
+/// "…/GLM-4.5-Air-Q4_K_S-00001-of-00002.gguf" → "GLM-4.5-Air-Q4_K_S".
+String modelDisplayName(String idOrPath) => _ggufDisplayName(p.basename(idOrPath.replaceAll('\\', '/')));
+
+/// İki model adı aynı modeli mi gösteriyor (yol, .gguf ve parça eki yok sayılır)?
+bool sameModel(String a, String b) {
+  String k(String s) => modelDisplayName(s).toLowerCase().replaceFirst(RegExp(r'\.gguf$'), '');
+  return k(a) == k(b);
+}
+
 /// Yardımcı: mmproj, vocab, imatrix veya mtp draft dosyalarını ana model listesinden ayıklar
 bool isAuxiliaryGgufFile(String fileName) {
   final lower = fileName.toLowerCase();
@@ -262,7 +272,7 @@ class SelectedModelNotifier extends Notifier<String> {
       preferred = ref.watch(settingsProvider.select((s) => s.preferredModel));
     } catch (_) {}
     final initial = (preferred != null && preferred.isNotEmpty)
-        ? preferred
+        ? (preferred.startsWith('Model İndirin') ? preferred : modelDisplayName(preferred))
         : 'Model İndirin (Ayarlar > Model Merkezi)';
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
       Future.microtask(() => syncWithRunningServer(ref.read(apiUrlProvider)));
@@ -295,8 +305,11 @@ class SelectedModelNotifier extends Notifier<String> {
   Future<void> syncWithRunningServer([String? apiUrl]) async {
     final runningModel = await fetchRunningServerModel(apiUrl);
     if (runningModel != null && runningModel.isNotEmpty) {
-      final fileName = p.basename(runningModel);
-      if (state != fileName) {
+      // Sunucu tam yolu (ve bölünmüş modelde -00001-of-0000N.gguf parçasını) bildirir;
+      // listede ise parça eki atılmış ad kullanılır. Aynı ada çevrilmezse açılır menü
+      // yanlış modeli gösterir ve yeniden seçmek modeli baştan yükletirdi.
+      final fileName = modelDisplayName(runningModel);
+      if (!sameModel(state, fileName)) {
         state = fileName;
         try { ref.read(settingsProvider.notifier).setPreferredModel(fileName); } catch (_) {}
       }
@@ -330,10 +343,12 @@ class SelectedModelNotifier extends Notifier<String> {
 
   Future<void> switchModel(String newModelName) async {
     if (newModelName.startsWith('Model İndirin')) return;
-    if (state == newModelName && ref.read(isBackendRunningProvider)) return;
+    if (sameModel(state, newModelName) && ref.read(isBackendRunningProvider)) return;
 
     // Aynı model zaten yükleniyorsa yüklemeyi öldürüp baştan başlatma.
-    if (_loadingFuture != null && _loadingModel == newModelName) return _loadingFuture;
+    if (_loadingFuture != null && _loadingModel != null && sameModel(_loadingModel!, newModelName)) {
+      return _loadingFuture;
+    }
 
     state = newModelName;
     try { ref.read(settingsProvider.notifier).setPreferredModel(newModelName); } catch (_) {}
@@ -354,7 +369,10 @@ class SelectedModelNotifier extends Notifier<String> {
   int _loadSeq = 0;
 
   Future<void> _runLoad(String modelName, Future<void> Function() body) async {
-    if (_loadingFuture != null && _loadingModel == modelName) return _loadingFuture;
+    // Tanılama: model yükleme isteğini kimin yaptığı (çift başlatma sorunlarını bulmak için).
+    final caller = StackTrace.current.toString().split('\n').skip(1).take(4).map((l) => l.trim()).join(' <- ');
+    print('[SelectedModelNotifier] yükleme isteği: $modelName (süren: $_loadingModel) çağıran: $caller');
+    if (_loadingFuture != null && _loadingModel != null && sameModel(_loadingModel!, modelName)) return _loadingFuture;
     final seq = ++_loadSeq;
     _loadingModel = modelName;
     ref.read(isModelSwitchingProvider.notifier).state = true;
@@ -377,7 +395,7 @@ class SelectedModelNotifier extends Notifier<String> {
     if (_loadingFuture != null) return _loadingFuture;
     final runningModel = await fetchRunningServerModel();
     if (runningModel != null && runningModel.isNotEmpty) {
-      final fileName = p.basename(runningModel);
+      final fileName = modelDisplayName(runningModel);
       state = fileName;
       ref.read(isBackendRunningProvider.notifier).state = true;
       try { ref.read(settingsProvider.notifier).setPreferredModel(fileName); } catch (_) {}
@@ -398,8 +416,7 @@ class SelectedModelNotifier extends Notifier<String> {
         executablePath: 'ollama',
         modelPathOrName: modelName,
         port: 11434,
-        contextSize: ref.read(maxContextSizeProvider),
-        useGpu: settings.useGpuForLlm,
+        computeMode: settings.computeMode,
       ));
       await syncWithRunningServer('http://127.0.0.1:11434/v1');
       return;
@@ -411,8 +428,7 @@ class SelectedModelNotifier extends Notifier<String> {
         executablePath: 'vllm',
         modelPathOrName: modelName,
         port: 8000,
-        contextSize: ref.read(maxContextSizeProvider),
-        useGpu: settings.useGpuForLlm,
+        computeMode: settings.computeMode,
       ));
       await syncWithRunningServer('http://127.0.0.1:8000/v1');
       return;
@@ -500,9 +516,14 @@ class SelectedModelNotifier extends Notifier<String> {
       type: BackendType.llamaCpp,
       executablePath: llamaExe ?? p.join(AppPaths.appRoot, 'bin', 'llama-cpp', AppPaths.exeName('llama-server')),
       modelPathOrName: absoluteModelPath,
-      contextSize: ref.read(maxContextSizeProvider),
-      useGpu: settings.useGpuForLlm,
+      contextSize: settings.contextSetting,
+      computeMode: settings.computeMode,
     ));
+    // Planlayıcının seçtiği gerçek bağlam boyutu (kenar çubuğundaki "x / 32K token").
+    final plan = ref.read(lastLaunchPlanProvider);
+    if (plan != null && plan.canStart && ref.read(isBackendRunningProvider)) {
+      ref.read(maxContextSizeProvider.notifier).state = plan.ctx;
+    }
     await syncWithRunningServer();
   }
 

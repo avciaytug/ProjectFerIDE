@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 
-/// FerIDE Çapraz Platform Taşınabilir Yol ve İkili Dosya Çözümleyicisi (v5.3.7)
+/// FerIDE Çapraz Platform Taşınabilir Yol ve İkili Dosya Çözümleyicisi (v5.3.8)
 ///
 /// Linux, Windows ve macOS üzerinde sabit kullanıcı veya dizin yollarını tamamen
 /// ortadan kaldırır. Uygulama masaüstünde, /opt altında, Program Files içinde,

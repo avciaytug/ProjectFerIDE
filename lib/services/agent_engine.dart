@@ -266,6 +266,11 @@ class AgentEngine {
           toolList.addAll(BuiltinTools.mcpTools(infos, timeoutSeconds: settings.mcpTimeoutSeconds));
           final reached = infos.map((i) => i.server).toSet();
           if (reached.isNotEmpty) mcpNote.write('\n\nBağlı MCP sunucuları: ${reached.join(', ')} (araç adları mcp__sunucu__araç).');
+          final failed = servers.where((s) => !reached.contains(s.name)).toList();
+          if (failed.isNotEmpty) {
+            _status('MCP: ${failed.length} sunucu başlatılamadı',
+                details: failed.map((s) => '${s.name}: ${McpService.missingRuntime(s) ?? 'yanıt vermedi'}').join('\n'));
+          }
         }
       }
       // Plan modunda yalnızca okuma araçları verilir (eskiden sadece talimattı).

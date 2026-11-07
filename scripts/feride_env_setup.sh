@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  FerIDE Beta v5.3.7 — Kullanıcı Alanı (Sudo Gerektirmeyen) Python Ortam Kurucu
+#  FerIDE Beta v5.3.8 — Kullanıcı Alanı (Sudo Gerektirmeyen) Python Ortam Kurucu
 #  ~/.feride/venv sanal ortamını oluşturur ve requirements.txt içindeki tüm
 #  Ofis, PDF, Resim, Ses, AutoCAD (ezdxf) ve STT/TTS kütüphanelerini kurar.
 # ==============================================================================
@@ -14,7 +14,7 @@ LOG_FILE="$FERIDE_HOME/logs/python_env_setup.log"
 mkdir -p "$FERIDE_HOME/logs"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "=== FerIDE v5.3.7 Python Ortam Kurulumu: $(date) ==="
+echo "=== FerIDE v5.3.8 Python Ortam Kurulumu: $(date) ==="
 
 if [ ! -x "$VENV_DIR/bin/python3" ]; then
   echo "[1/3] ~/.feride/venv oluşturuluyor..."

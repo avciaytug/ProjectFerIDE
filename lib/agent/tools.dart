@@ -823,7 +823,12 @@ class BuiltinTools {
       }
       AegisService.instance.bumpSkillUse(skill.name);
       ctx.onMemoryChanged?.call();
-      return 'BECERİ: ${skill.name}\n\n${skill.content}';
+      final folder = AegisService.instance.skillFolder(skill.name);
+      final files = folder == null || folder.files.isEmpty
+          ? ''
+          : '\n\nBu becerinin klasörü: ${folder.dir}\nTalimatlarda adı geçen ek dosyaları read_file ile bu klasörden oku:\n'
+              '${folder.files.map((f) => '- $f').join('\n')}';
+      return 'BECERİ: ${skill.name}$files\n\n${skill.content}';
     },
   );
 

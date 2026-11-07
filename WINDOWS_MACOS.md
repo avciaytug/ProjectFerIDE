@@ -1,4 +1,4 @@
-# FerIDE'yi Windows veya macOS'a taşıma (v5.3.7)
+# FerIDE'yi Windows veya macOS'a taşıma (v5.3.8)
 
 Bu klasör üç işletim sistemi için aynı kaynak kodunu içerir. Klasördeki **hazır çalıştırılabilir dosya ise yalnızca Linux içindir.** Windows `.exe`'si Windows'ta, macOS `.app`'i macOS'ta derlenir; Flutter masaüstü uygulamaları başka bir işletim sisteminde derlenemez. Kurulum betikleri bunu sizin yerinize yapar.
 
@@ -25,6 +25,20 @@ Notlar:
 1. Xcode'u ve Homebrew'u kurun: `xcode-select --install`.
 2. **`kurulum_macos.command`** dosyasına çift tıklayın. Python ortamını, kadın sesi, Metal destekli llama-server'ı kurar ve Flutter varsa `.app`'i derler.
 3. **`baslat_macos.command`** ile başlatın. İlk açılışta mikrofon izni verin.
+
+## Büyük modeller ve GPU/CPU seçimi (her platformda)
+
+**Ayarlar > Genel > Model Çalıştırma** bölümünden dört mod seçilebilir:
+
+| Mod | Ne yapar |
+|---|---|
+| Otomatik (önerilen) | FerIDE belleği ölçer. Model sığıyorsa tamamını GPU'ya, sığmıyorsa sığan kısmını GPU'ya ve kalanını RAM'e koyar; bağlamı da buna göre seçer. |
+| GPU offload | Modelin tamamı GPU'da çalışır. Sığmıyorsa model başlatılmaz ve nedeni gösterilir. |
+| CPU offload | MoE modellerinde uzman ağırlıkları RAM'de, kalanı GPU'da. GPU belleği azken en kararlısı. |
+| Yalnızca CPU | Ekran kartı kullanılmaz. |
+
+- **Windows/NVIDIA:** GPU belleği `CUDA0` aygıtından, **macOS:** `MTL0` (paylaşımlı bellek) aygıtından otomatik ölçülür.
+- **Linux AMD APU (Strix Halo vb.):** GPU varsayılan olarak RAM'in yalnızca yarısını kullanabilir. Ayarlar'daki komutla (`sudo bash scripts/gpu_bellek_ayari.sh`) bu sınır yükseltilebilir. Windows'ta bu sınır sürücü ve BIOS ayarlarıyla belirlenir; ayrıca bir işlem gerekmez.
 
 ## Bulutta otomatik derleme (isteğe bağlı)
 

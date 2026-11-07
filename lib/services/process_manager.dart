@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'app_paths.dart';
 
-/// FerIDE Çapraz Platform Ses Sunucuları Yaşam Döngüsü Yöneticisi (v5.3.7)
+/// FerIDE Çapraz Platform Ses Sunucuları Yaşam Döngüsü Yöneticisi (v5.3.8)
 ///
 /// Linux, Windows ve macOS üzerinde gömülü/yerel faster-whisper STT (port 5052),
 /// Türkçe kadın/erkek TTS (port 5050) ve WebSocket VAD (port 5051) servislerini

@@ -257,7 +257,6 @@ void main() {
       final state = SettingsState(
         useGpuForStt: true,
         useGpuForTts: true,
-        useGpuForLlm: true,
         skillsPath: '/dummy/skills',
         chatHistoryPath: '/dummy/chats',
         disabledSkills: [],

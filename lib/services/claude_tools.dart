@@ -302,6 +302,43 @@ class GlobService {
     'dev',
   };
 
+  /// Glob desenini düzenli ifadeye çevirir: `**/` sıfır veya daha çok klasör,
+  /// `**` her şey, `*` klasör ayırıcı dışında her şey, `?` tek karakter,
+  /// `{a,b}` seçenekler; diğer karakterler kaçışlanır. Windows ve macOS'ta
+  /// dosya sistemi gibi büyük/küçük harfe duyarsızdır.
+  static RegExp globToRegExp(String pattern) {
+    final b = StringBuffer('^');
+    var i = 0;
+    while (i < pattern.length) {
+      final c = pattern[i];
+      if (c == '*') {
+        if (i + 1 < pattern.length && pattern[i + 1] == '*') {
+          if (i + 2 < pattern.length && pattern[i + 2] == '/') {
+            b.write('(?:.*/)?');
+            i += 3;
+          } else {
+            b.write('.*');
+            i += 2;
+          }
+          continue;
+        }
+        b.write('[^/]*');
+      } else if (c == '?') {
+        b.write('[^/]');
+      } else if (c == '{' && pattern.indexOf('}', i) > i) {
+        final end = pattern.indexOf('}', i);
+        b.write('(?:${pattern.substring(i + 1, end).split(',').map(RegExp.escape).join('|')})');
+        i = end + 1;
+        continue;
+      } else {
+        b.write(RegExp.escape(c));
+      }
+      i++;
+    }
+    b.write(r'$');
+    return RegExp(b.toString(), caseSensitive: !(Platform.isWindows || Platform.isMacOS));
+  }
+
   static Future<String> findFiles({
     required String pattern,
     String? path,
@@ -315,14 +352,10 @@ class GlobService {
     }
 
     try {
-      // ** ile * çakışmasını önleyen doğru dönüştürme
-      final regExpPattern = pattern
-          .replaceAll('.', r'\.')
-          .replaceAll('**', '__GLOB_STAR_STAR__')
-          .replaceAll('*', r'[^/]*')
-          .replaceAll('__GLOB_STAR_STAR__', r'.*')
-          .replaceAll('?', r'.');
-      final regex = RegExp('^.*$regExpPattern\$');
+      final clean = pattern.trim().replaceAll(r'\', '/').replaceFirst(RegExp(r'^\./'), '');
+      final regex = globToRegExp(clean);
+      // Klasör içermeyen desen (ör. "*.pdf") her derinlikte dosya adına uygulanır.
+      final matchBasename = !clean.contains('/');
 
       final List<String> matches = [];
       final deadline = DateTime.now().add(const Duration(seconds: 15));
@@ -333,16 +366,16 @@ class GlobService {
           .handleError((_) {})) {
         visitedCount++;
         if (visitedCount >= 25000 || DateTime.now().isAfter(deadline)) break;
+        if (entity is! File) continue;
 
-        final base = p.basename(entity.path);
-        if (_ignoredDirs.contains(base)) continue;
+        final relPath = p.relative(entity.path, from: searchDir.path).replaceAll(r'\', '/');
+        // Yoksayılan klasörlerin (node_modules, build, .git...) İÇİNDEKİ dosyalar da atlanır.
+        final segments = relPath.split('/');
+        if (segments.take(segments.length - 1).any(_ignoredDirs.contains)) continue;
 
-        if (entity is File) {
-          final relPath = p.relative(entity.path, from: searchDir.path);
-          if (regex.hasMatch(relPath) || regex.hasMatch(base)) {
-            matches.add(relPath);
-            if (matches.length >= 100) break;
-          }
+        if (regex.hasMatch(matchBasename ? segments.last : relPath)) {
+          matches.add(relPath);
+          if (matches.length >= 100) break;
         }
       }
 

@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../aegis/aegis_service.dart';
 import '../../agent/permissions.dart';
+import '../../services/model_launch_planner.dart';
 import '../../services/app_paths.dart';
 import '../../services/mcp_service.dart';
 
@@ -14,7 +15,13 @@ final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
 class SettingsState {
   final bool useGpuForStt;
   final bool useGpuForTts;
-  final bool useGpuForLlm;
+  /// Yerel modelin nasıl çalıştırılacağı (Otomatik / GPU / CPU offload / Yalnızca CPU).
+  final ComputeMode computeMode;
+
+  /// Bağlam boyutu (token); 0 = otomatik (belleğe göre seçilir).
+  final int contextSetting;
+
+  bool get useGpuForLlm => computeMode != ComputeMode.cpu;
   final String skillsPath;
   final String chatHistoryPath;
   final List<String> disabledSkills;
@@ -52,7 +59,8 @@ class SettingsState {
   SettingsState({
     required this.useGpuForStt,
     required this.useGpuForTts,
-    required this.useGpuForLlm,
+    this.computeMode = ComputeMode.auto,
+    this.contextSetting = 0,
     required this.skillsPath,
     required this.chatHistoryPath,
     required this.disabledSkills,
@@ -81,7 +89,8 @@ class SettingsState {
   SettingsState copyWith({
     bool? useGpuForStt,
     bool? useGpuForTts,
-    bool? useGpuForLlm,
+    ComputeMode? computeMode,
+    int? contextSetting,
     String? skillsPath,
     String? chatHistoryPath,
     List<String>? disabledSkills,
@@ -104,7 +113,8 @@ class SettingsState {
     return SettingsState(
       useGpuForStt: useGpuForStt ?? this.useGpuForStt,
       useGpuForTts: useGpuForTts ?? this.useGpuForTts,
-      useGpuForLlm: useGpuForLlm ?? this.useGpuForLlm,
+      computeMode: computeMode ?? this.computeMode,
+      contextSetting: contextSetting ?? this.contextSetting,
       skillsPath: skillsPath ?? this.skillsPath,
       chatHistoryPath: chatHistoryPath ?? this.chatHistoryPath,
       disabledSkills: disabledSkills ?? this.disabledSkills,
@@ -156,7 +166,11 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       : super(SettingsState(
           useGpuForStt: prefs.getBool('useGpuForStt') ?? true,
           useGpuForTts: prefs.getBool('useGpuForTts') ?? true,
-          useGpuForLlm: prefs.getBool('useGpuForLlm') ?? true,
+          // Eski "GPU kapalı" tercihi "Yalnızca CPU" olarak taşınır.
+          computeMode: prefs.getString('computeMode') != null
+              ? computeModeFromName(prefs.getString('computeMode'))
+              : ((prefs.getBool('useGpuForLlm') ?? true) ? ComputeMode.auto : ComputeMode.cpu),
+          contextSetting: prefs.getInt('contextSetting') ?? 0,
           skillsPath: prefs.getString('skillsPath') ?? _defaultSkillsPath(),
           chatHistoryPath: prefs.getString('chatHistoryPath') ?? _defaultChatsPath(),
           disabledSkills: prefs.getStringList('disabledSkills') ?? [],
@@ -238,9 +252,14 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     prefs.setBool('useGpuForTts', value);
   }
 
-  void toggleLlmGpu(bool value) {
-    state = state.copyWith(useGpuForLlm: value);
-    prefs.setBool('useGpuForLlm', value);
+  void setComputeMode(ComputeMode mode) {
+    state = state.copyWith(computeMode: mode);
+    prefs.setString('computeMode', mode.name);
+  }
+
+  void setContextSetting(int ctx) {
+    state = state.copyWith(contextSetting: ctx);
+    prefs.setInt('contextSetting', ctx);
   }
 
   void setSkillsPath(String path) {

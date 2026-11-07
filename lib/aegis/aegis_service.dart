@@ -67,6 +67,10 @@ class AegisService {
         updated_at TEXT
       );
     ''');
+    // Eski sürümlerdeki sütun kayması: use_count'a tarih, created_at'e 0 yazılıyordu.
+    try {
+      _exec("UPDATE skills SET created_at = updated_at, use_count = 0 WHERE typeof(use_count) = 'text'");
+    } catch (_) {}
     _exec('''
       CREATE TABLE IF NOT EXISTS experiences (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,7 +183,7 @@ class AegisService {
     final now = DateTime.now().toIso8601String();
     _exec(
       'INSERT INTO skills (name, description, content, use_count, created_at, updated_at) '
-      'VALUES (?,?,?,?,0,?) '
+      'VALUES (?,?,?,0,?,?) '
       'ON CONFLICT(name) DO UPDATE SET '
       'description=excluded.description, content=excluded.content, updated_at=excluded.updated_at',
       [name, description, content, now, now],
@@ -269,25 +273,60 @@ class AegisService {
   String get skillsDir => p.join(AppPaths.ferideDataDir, 'skills');
 
   /// SKILL.md içeriğini ayrıştırır: [name, description, body] döner, geçersizse null.
+  /// Tırnaklı değerler ("..."/'...') ve çok satırlı YAML (>, |, girintili devam) desteklenir.
   static List<String>? parseSkillMd(String raw) {
-    final text = raw.trim();
+    final text = raw.replaceAll('\r\n', '\n').trim();
     if (!text.startsWith('---')) return null;
-    final end = text.indexOf('---', 3);
+    final end = text.indexOf('\n---', 3);
     if (end < 0) return null;
-    final front = text.substring(3, end).trim();
-    final body = text.substring(end + 3).trim();
-    String? name;
-    String? description;
-    for (final line in front.split('\n')) {
-      final l = line.trim();
-      if (l.startsWith('name:')) {
-        name = l.substring(5).trim();
-      } else if (l.startsWith('description:')) {
-        description = l.substring(12).trim();
+    final front = text.substring(3, end).split('\n');
+    final body = text.substring(end + 4).trim();
+
+    String? field(String key) {
+      for (var i = 0; i < front.length; i++) {
+        final line = front[i];
+        if (!line.startsWith('$key:')) continue;
+        var value = line.substring(key.length + 1).trim();
+        final block = value == '>' || value == '|' || value == '>-' || value == '|-' || value.isEmpty;
+        if (block) {
+          final parts = <String>[];
+          for (var j = i + 1; j < front.length && (front[j].startsWith(' ') || front[j].startsWith('\t')); j++) {
+            parts.add(front[j].trim());
+          }
+          value = parts.join(' ');
+        } else {
+          // Girintili devam satırları (düz çok satırlı değer)
+          for (var j = i + 1; j < front.length && front[j].startsWith('  '); j++) {
+            value += ' ${front[j].trim()}';
+          }
+        }
+        if (value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+          value = value.substring(1, value.length - 1).replaceAll(r'\"', '"');
+        }
+        return value.trim();
       }
+      return null;
     }
+
+    final name = field('name');
     if (name == null || name.isEmpty) return null;
-    return [name, description ?? '', body];
+    return [name, field('description') ?? '', body];
+  }
+
+  /// Bir skill'in diskteki klasörü (yoksa null) ve içindeki ek dosyalar.
+  ({String dir, List<String> files})? skillFolder(String name) {
+    final d = Directory(p.join(skillsDir, name));
+    if (!d.existsSync()) return null;
+    final files = <String>[];
+    try {
+      for (final e in d.listSync(recursive: true)) {
+        if (e is File && p.basename(e.path) != 'SKILL.md') files.add(p.relative(e.path, from: d.path));
+        if (files.length >= 40) break;
+      }
+    } catch (_) {}
+    files.sort();
+    return (dir: d.path, files: files);
   }
 
   /// Tek bir skill klasörünü (içinde SKILL.md olan) ~/.feride/skills/'e kopyalar ve DB'ye kaydeder.
@@ -311,7 +350,7 @@ class AegisService {
     final now = DateTime.now().toIso8601String();
     _exec(
       'INSERT INTO skills (name, description, content, use_count, created_at, updated_at) '
-      'VALUES (?,?,?,?,0,?) '
+      'VALUES (?,?,?,0,?,?) '
       'ON CONFLICT(name) DO UPDATE SET '
       'description=excluded.description, content=excluded.content, updated_at=excluded.updated_at',
       [name, desc, body, now, now],

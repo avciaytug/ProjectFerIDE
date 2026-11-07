@@ -1,5 +1,81 @@
 # FerIDE inceleme ve yenileme raporu
 
+## v5.3.8 — Büyük modellerde çökme, GPU/CPU seçimi, skill ve MCP onarımları
+
+### Büyük model (GLM-4.5-Air) çökmesinin kök nedeni
+- **GPU belleği sınırı.** AMD Strix Halo'da GPU, Linux'un varsayılanı yüzünden 128 GB'ın yalnızca **62,5 GiB**'ını kullanabiliyor (`ttm.pages_limit`).
+- **Model + bağlam sınırı aştı.** GLM-4.5-Air Q4_K_S'nin ağırlıkları 62,4 GiB. Uygulama buna 131.072 token bağlam (≈12 GiB KV) ekliyor ve yalnızca birkaç GiB pay bırakıyordu.
+- **Zincirleme çöküş.** GPU belleği tükenince masaüstü, Chrome ve FerIDE'nin kendisi de GPU belleği alamayıp çöktü. Çekirdek logunda `bind failed: -ENOSPC` ve `Not enough memory for command submission`; 10:22–10:32 arasında FerIDE, Chrome ve llama-server için çökme dökümleri var.
+- **Çift başlatma.** Ek olarak model iki kez üst üste başlatılabiliyordu. Bu sabah başka bir oturumda yapılan düzeltmeler (`--fit`, çift başlatma kilidi) korundu ve üzerine kuruldu.
+
+### Bellek-farkında model başlatıcı (yeni)
+- **`gguf_info.dart`.** Model dosyasının yalnızca başlığını okur (≈20 ms). Mimari, katmanlar, MoE uzman boyutu ve KV ihtiyacını çıkarır. Kayan pencereli (Gemma 4), karma/recurrent (Qwen3.5/3.8) ve MTP katmanlı (GLM) modelleri doğru hesaplar; ilk tahminde Gemma 4 için 51 GiB çıkan KV, gerçekçi değerine (1,6 GiB) indi.
+- **`hardware_probe.dart`.** RAM, fiziksel çekirdek ve GPU belleğini llama-server'ın kendi `--list-devices` çıktısından ölçer (Vulkan/CUDA/ROCm/Metal). Paylaşımlı belleği (APU, Apple Silicon) tanır. Kurulu llama.cpp'nin **desteklediği seçenekleri** `--help`'ten okur; sürüm farkları kırılmaya yol açmaz (bu sürümde `--no-mmap` → `--load-mode none` olmuştu).
+- **`model_launch_planner.dart`.** Seçilen moda göre yerleşimi ve bağlamı belirler, masaüstü için güvenli pay bırakır (paylaşımlı bellekte ≥8 GiB). Sığmayan yapılandırmayı **başlatmaz**, nedenini ve çözümünü yazar.
+- **Motor yöneticisi.**
+  - Başlatma ve durdurma sıralı (aynı anda tek model).
+  - Önceki model kapandıktan sonra ölçüm ve plan yapılıyor.
+  - Linux'ta modele `oom_score_adj=800` veriliyor; RAM biterse çekirdek önce modeli kapatır, masaüstünü değil.
+  - Yükleme süresi model boyutuna göre bekleniyor.
+  - Çökme nedeni Türkçe açıklanıyor; yüklemeden sonra GPU'da ölçülen bellek gösteriliyor.
+
+### Ayarlar > Genel > Model Çalıştırma (yeni)
+- **Otomatik** (önerilen), **GPU offload** (tamamı GPU), **CPU offload** (MoE uzmanları RAM'de, kalanı GPU'da), **Yalnızca CPU**.
+- Bağlam boyutu: Otomatik / 8K–128K.
+- Donanım özeti, son plan, uyarılar.
+- APU'larda GPU bellek sınırını yükselten komut (`scripts/gpu_bellek_ayari.sh`, sudo gerekir, geri alınabilir).
+
+### GPU bellek sınırı betiği
+- `sudo bash scripts/gpu_bellek_ayari.sh` sınırı "RAM − 12 GB"a (bu makinede 112 GiB) yükseltir.
+- Ana GRUB dosyasına dokunmaz; `/etc/default/grub.d/` altına ayrı bir dosya ekler. Geri almak: `--geri-al`.
+- **Bu makinede tespit edilen sorun:** `/etc/default/grub` dosyasının 1. satırının başında yanlışlıkla yazılmış "xx" var (bugün 10:50'de değiştirilmiş). Bu haliyle `update-grub` hata verip durur. Betik bunu tespit eder ve onayınızla, yedek alarak düzeltir.
+
+### Gerçek donanımda doğrulama (bu makine, GLM-4.5-Air Q4_K_S, 67 GB)
+
+| Mod | Yükleme | GPU'da kullanılan | GPU'da boş kalan | Hız | Çekirdek GPU hatası |
+|---|---|---|---|---|---|
+| Otomatik | 16 sn | 52,3 GiB (modelin ~%77'si, 32K bağlam) | 8,2 GiB | 16,1 token/sn | 0 |
+| CPU offload | 33 sn | 18,4 GiB (tahmin: 18,6) | 42,3 GiB | 11,3–12,2 token/sn | 0 |
+| GPU offload | — | Başlatılmadı: "64,3 GiB gerekiyor, GPU'da 52,5 GiB kullanılabilir" | — | — | — |
+
+Aynı model üzerinde ajan uçtan uca çalıştırıldı:
+- **Skill:** `systematic-debugging` kendiliğinden seçilip yüklendi (40 sn).
+- **MCP sqlite:** tablo oluşturuldu, satır eklendi, sorgulandı (18 sn).
+- **MCP fetch:** web sayfası çekildi (10 sn).
+- **Alt ajan:** dosyaları saydı ve sonucu bildirdi (45 sn).
+
+Kullanıcının uygulamada GLM, Huihui 27B ve Qwen 35B arasında yaptığı geçişler de çökmeden tamamlandı.
+
+### Gerçek testlerin ortaya çıkardığı ek hatalar (düzeltildi)
+- **`--no-mmap` → `--load-mode`.** llama.cpp `--no-mmap` seçeneğini kaldırmış; model hiç açılmıyordu. Artık kurulu sürümün desteklediği seçenekler `--help`'ten okunuyor. Eski sürümlerde `--no-mmap` ve hesaplanmış `-ngl` kullanılıyor.
+- **Aynı modelin yeniden yüklenmesi.**
+  1. Sunucu model kimliğini tam dosya yoluyla bildiriyor (bölünmüş modelde `…-00001-of-00002.gguf`), model listesi ise parça ekini atılmış adı kullanıyor.
+  2. Yüklemeden sonra açılır menü yanlış modeli gösteriyordu; aynı model yeniden seçilince baştan yükleniyordu.
+  3. Bu sabahki çift başlatmanın da muhtemel kaynağı buydu. Adlar artık normalleştiriliyor; aynı model yeniden seçilirse yükleme yapılmıyor.
+- **Yanlış görüntü projektörü.** Qwen3.8-35B'ye 27B'nin mmproj dosyası eşleniyordu: ilk yükleme her seferinde başarısız oluyor, görüntü desteği kayboluyordu. Eşleştirme artık en uzun ortak ada ve parametre boyutuna (35b/27b/12b) göre yapılıyor.
+- **`glob` aracı.**
+  - `**/*.txt` kökteki dosyaları bulamıyordu.
+  - `node_modules`, `build`, `.git` içindeki dosyalar sonuçlara giriyordu.
+  - Parantez gibi karakterler kaçışlanmıyordu; Windows yol ayırıcısı desteklenmiyordu.
+  - Doğru glob anlamıyla yeniden yazıldı.
+
+### Skill'ler
+- Diskten senkronizasyon fonksiyonu hiç çağrılmıyordu: `~/.feride/skills` altındaki **17 skill'in yalnızca 5'i** ajana görünüyordu. Artık açılışta senkronize ediliyor.
+- Kayıt sorgusunda sütun kayması vardı: kullanım sayacına tarih, oluşturulma tarihine 0 yazılıyordu. Düzeltildi; eski kayıtlar otomatik onarılıyor.
+- Tırnaklı ve çok satırlı YAML açıklamalar doğru okunuyor.
+- `use_skill`, skill klasörünün yolunu ve ek dosyalarını da veriyor (ör. brainstorming → `visual-companion.md`, `scripts/`).
+
+### MCP
+- İstemci sağlam. Ancak varsayılan sunucular Node.js (`npx`) ve uv (`uvx`) istiyordu ve bunlar kurulu değildi; hiçbir sunucu çalışmıyor, uygulama da "Hazır" gösteriyordu.
+  - Artık eksik çalışma ortamı sunucu başına gösteriliyor.
+  - MCP sekmesinde "uv kur" düğmesi ve Node.js komutu var.
+- Resmî `mcp-server-sqlite` arşivlenmiş ve güncel MCP/pydantic ile çalışmıyor (`'Server' object has no attribute 'list_resources'`).
+  - FerIDE'ye yalnızca Python standart kütüphanesiyle yazılmış **yerleşik SQLite MCP sunucusu** eklendi.
+  - Eski yapılandırma otomatik olarak buna taşınıyor.
+  - Okuma araçları salt-okunur işaretli ve yıkıcı sorguları reddediyor.
+
+---
+
 ## v5.3.7 — Feride'nin kadın sesi, ses seçimi ve Windows/macOS hazırlığı
 
 **Kadın sesi (varsayılan): Feride — Ahenk Cep.** Tasarlanmış sentetik bir Türkçe kadın sesi; gerçek bir kişiye ait değil.

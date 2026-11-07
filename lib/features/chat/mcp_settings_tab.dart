@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../../services/app_paths.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/mcp_service.dart';
 import '../../theme/ide_palette.dart';
@@ -63,6 +64,7 @@ class _McpSettingsTabWidgetState extends ConsumerState<McpSettingsTabWidget> {
           // 1. Başlık ve Üst Kart
           _buildHeaderSection(context, settings, isLight, textColor, secondaryTextColor),
           const SizedBox(height: 16),
+          _McpRuntimeBanner(textColor: textColor, secondaryTextColor: secondaryTextColor, onChanged: () => setState(() {})),
 
           // 2. Arama ve İstatistik Çubuğu
           Row(
@@ -960,6 +962,93 @@ class _McpSettingsTabWidgetState extends ConsumerState<McpSettingsTabWidget> {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+/// Etkin MCP sunucularından çalışamayanları (Node.js / uv eksik) ve çözümünü gösterir.
+class _McpRuntimeBanner extends StatefulWidget {
+  final Color textColor;
+  final Color secondaryTextColor;
+  final VoidCallback onChanged;
+  const _McpRuntimeBanner({required this.textColor, required this.secondaryTextColor, required this.onChanged});
+
+  @override
+  State<_McpRuntimeBanner> createState() => _McpRuntimeBannerState();
+}
+
+class _McpRuntimeBannerState extends State<_McpRuntimeBanner> {
+  bool _installing = false;
+  String? _result;
+
+  Future<void> _installUv() async {
+    setState(() {
+      _installing = true;
+      _result = null;
+    });
+    try {
+      final r = await Process.run(
+        AppPaths.resolvePython(),
+        ['-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'uv'],
+        environment: AppPaths.buildSubprocessEnv(),
+      ).timeout(const Duration(minutes: 5));
+      _result = r.exitCode == 0 ? 'uv kuruldu.' : 'uv kurulamadı: ${r.stderr.toString().trim().split('\n').last}';
+      McpService.instance.loadConfig(McpService.instance.configPath);
+    } catch (e) {
+      _result = 'uv kurulamadı: $e';
+    }
+    if (!mounted) return;
+    setState(() => _installing = false);
+    widget.onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final broken = McpService.instance.servers
+        .where((s) => s.isEnabled)
+        .map((s) => (s, McpService.missingRuntime(s)))
+        .where((e) => e.$2 != null)
+        .toList();
+    if (broken.isEmpty && _result == null) return const SizedBox.shrink();
+    final needsUv = broken.any((e) => e.$2!.contains('uv'));
+    final nodeHint = broken.map((e) => e.$2!).where((h) => h.contains('Node.js')).firstOrNull;
+    const amber = Color(0xFFF59E0B);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: amber.withValues(alpha: 0.5)),
+        color: amber.withValues(alpha: 0.06),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.warning_amber_rounded, color: amber, size: 18),
+          const SizedBox(width: 8),
+          Text('${broken.length} MCP sunucusu bu bilgisayarda çalışamıyor',
+              style: TextStyle(color: widget.textColor, fontWeight: FontWeight.w600, fontSize: 13)),
+        ]),
+        const SizedBox(height: 6),
+        for (final e in broken)
+          Text('• ${e.$1.name}: ${e.$2!.replaceFirst('Çalışamaz: ', '')}',
+              style: TextStyle(color: widget.secondaryTextColor, fontSize: 12)),
+        const SizedBox(height: 8),
+        Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          if (needsUv)
+            FilledButton.tonalIcon(
+              onPressed: _installing ? null : _installUv,
+              icon: _installing
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.download_rounded, size: 18),
+              label: Text(_installing ? 'Kuruluyor...' : 'uv kur (fetch, sqlite vb. için)'),
+            ),
+          if (nodeHint != null)
+            SelectableText(nodeHint.replaceFirst('Node.js gerekli: ', 'Node.js için terminalde: '),
+                style: TextStyle(color: widget.textColor, fontFamily: 'monospace', fontSize: 12)),
+          if (_result != null) Text(_result!, style: TextStyle(color: widget.secondaryTextColor, fontSize: 12)),
+        ]),
+      ]),
     );
   }
 }
