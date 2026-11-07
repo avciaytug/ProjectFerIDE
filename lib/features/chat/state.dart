@@ -332,23 +332,49 @@ class SelectedModelNotifier extends Notifier<String> {
     if (newModelName.startsWith('Model İndirin')) return;
     if (state == newModelName && ref.read(isBackendRunningProvider)) return;
 
+    // Aynı model zaten yükleniyorsa yüklemeyi öldürüp baştan başlatma.
+    if (_loadingFuture != null && _loadingModel == newModelName) return _loadingFuture;
+
     state = newModelName;
     try { ref.read(settingsProvider.notifier).setPreferredModel(newModelName); } catch (_) {}
 
-    ref.read(isModelSwitchingProvider.notifier).state = true;
-    try {
+    await _runLoad(newModelName, () async {
       final backendManager = ref.read(backendManagerProvider);
       await backendManager.stopBackend();
       await Future.delayed(const Duration(seconds: 1));
       await _startModelInternal(newModelName);
+    });
+  }
+
+  /// Şu an yüklenmekte olan model. Büyük modellerin (ör. GLM-4.5-Air, 62 GB)
+  /// yüklenmesi 1-2 dakika sürer; bu sırada ▶'ye tekrar basmak ya da açılıştaki
+  /// otomatik başlatma, yüklenmekte olan motoru öldürüp baştan başlatıyordu.
+  String? _loadingModel;
+  Future<void>? _loadingFuture;
+  int _loadSeq = 0;
+
+  Future<void> _runLoad(String modelName, Future<void> Function() body) async {
+    if (_loadingFuture != null && _loadingModel == modelName) return _loadingFuture;
+    final seq = ++_loadSeq;
+    _loadingModel = modelName;
+    ref.read(isModelSwitchingProvider.notifier).state = true;
+    final fut = body();
+    _loadingFuture = fut;
+    try {
+      await fut;
     } catch (e) {
-      print('[SelectedModelNotifier] switchModel hatası: $e');
+      print('[SelectedModelNotifier] model yükleme hatası: $e');
     } finally {
-      ref.read(isModelSwitchingProvider.notifier).state = false;
+      if (seq == _loadSeq) {
+        _loadingFuture = null;
+        _loadingModel = null;
+        ref.read(isModelSwitchingProvider.notifier).state = false;
+      }
     }
   }
 
   Future<void> startModel() async {
+    if (_loadingFuture != null) return _loadingFuture;
     final runningModel = await fetchRunningServerModel();
     if (runningModel != null && runningModel.isNotEmpty) {
       final fileName = p.basename(runningModel);
@@ -359,7 +385,7 @@ class SelectedModelNotifier extends Notifier<String> {
     }
 
     final targetModel = state;
-    await _startModelInternal(targetModel);
+    await _runLoad(targetModel, () => _startModelInternal(targetModel));
   }
 
   Future<void> _startModelInternal(String modelName) async {
@@ -488,6 +514,8 @@ class SelectedModelNotifier extends Notifier<String> {
       await backendManager.stopBackend();
       return;
     }
+    // Yükleme sürüyorsa ikinci basış yüklemeyi yeniden başlatmasın.
+    if (_loadingFuture != null) return;
     await startModel();
   }
 
