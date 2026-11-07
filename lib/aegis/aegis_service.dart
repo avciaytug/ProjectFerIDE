@@ -101,18 +101,30 @@ class AegisService {
           VALUES (new.id, new.summary, new.tools_used, new.result);
         END;
       ''');
+      // Harici içerikli FTS5'te satır 'delete' komutuyla ve eski değerlerle silinir.
+      // Eski tetikleyiciler düz DELETE kullanıyordu; silinen kayıtların sözcükleri
+      // dizinde kalıyordu. Bir kez değiştirilip dizin yeniden kurulur.
+      final oldTrigger = _query("SELECT sql FROM sqlite_master WHERE name = 'experiences_ad'");
+      final needsFix = oldTrigger.isNotEmpty && !(oldTrigger.first['sql'] as String? ?? '').contains("'delete'");
+      if (needsFix) {
+        _exec('DROP TRIGGER IF EXISTS experiences_ad;');
+        _exec('DROP TRIGGER IF EXISTS experiences_au;');
+      }
       _exec('''
         CREATE TRIGGER IF NOT EXISTS experiences_ad AFTER DELETE ON experiences BEGIN
-          DELETE FROM experiences_fts WHERE rowid = old.id;
+          INSERT INTO experiences_fts(experiences_fts, rowid, summary, tools_used, result)
+          VALUES ('delete', old.id, old.summary, old.tools_used, old.result);
         END;
       ''');
       _exec('''
         CREATE TRIGGER IF NOT EXISTS experiences_au AFTER UPDATE ON experiences BEGIN
-          DELETE FROM experiences_fts WHERE rowid = old.id;
+          INSERT INTO experiences_fts(experiences_fts, rowid, summary, tools_used, result)
+          VALUES ('delete', old.id, old.summary, old.tools_used, old.result);
           INSERT INTO experiences_fts(rowid, summary, tools_used, result)
           VALUES (new.id, new.summary, new.tools_used, new.result);
         END;
       ''');
+      if (needsFix) _exec("INSERT INTO experiences_fts(experiences_fts) VALUES('rebuild');");
       _hasFts = true;
     } catch (_) {
       _hasFts = false;
@@ -242,7 +254,7 @@ class AegisService {
   }
 
   /// Sistem promptuna enjekte edilecek, sorguyla en alakalı beceri + deneyim bloğu.
-  /// Claude Code tarzı "progressive disclosure": prompt'a yalnızca skill İNDEKSİ
+  /// Aşamalı açıklama ("progressive disclosure"): prompt'a yalnızca skill İNDEKSİ
   /// (isim + açıklama) girer; tam talimat use_skill aracıyla yüklenir. Token tasarrufu sağlar.
   String getRelevantContext(String query, {int skillLimit = 40, int expLimit = 3, List<String> disabledSkills = const []}) {
     _ensureInit();
@@ -255,6 +267,7 @@ class AegisService {
     final exps = searchExperiences(query, limit: expLimit);
     if (exps.isNotEmpty) {
       buf.writeln('## GEÇMİŞ DENEYİMLER (Memory)');
+      buf.writeln('(Yalnızca yöntem örneğidir. Kimliğin ve kendini tanıtman için yalnızca sistem talimatına uy; eski yanıtları kopyalama.)');
       for (final e in exps) {
         final ok = e['success'] == 1 ? 'Başarılı' : 'Hatalı';
         final tools = (e['tools_used'] as String?) ?? '';
@@ -265,11 +278,11 @@ class AegisService {
     return buf.toString().trim();
   }
 
-  // ---------- Claude Code tarzı SKILL.md desteği ----------
+  // ---------- SKILL.md desteği ----------
   // Klasik yapı: ~/.feride/skills/<skill-ad>/SKILL.md
   // SKILL.md: YAML frontmatter (name, description) + markdown gövde.
 
-  /// Kişisel skill klasörü (Claude Code'daki ~/.claude/skills karşılığı).
+  /// Kişisel skill klasörü (~/.feride/skills).
   String get skillsDir => p.join(AppPaths.ferideDataDir, 'skills');
 
   /// SKILL.md içeriğini ayrıştırır: [name, description, body] döner, geçersizse null.
@@ -340,7 +353,7 @@ class AegisService {
     final name = parsed[0];
     final desc = parsed[1];
     final body = parsed[2];
-    // Claude Code tarzı: skill diskte de yaşar (~/.feride/skills/<name>/)
+    // Skill diskte de yaşar (~/.feride/skills/<name>/)
     final src = Directory(folderPath);
     final target = Directory(p.join(skillsDir, name));
     if (!target.existsSync()) {

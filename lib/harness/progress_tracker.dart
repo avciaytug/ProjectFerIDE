@@ -3,7 +3,7 @@ library;
 import 'dart:collection';
 import 'dart:convert';
 
-/// FerIDE Akıllı Durdurma ve Döngü Önleme Yöneticisi (Claude Code Standartları)
+/// FerIDE Akıllı Durdurma ve Döngü Önleme Yöneticisi
 ///
 /// Salt-okuma döngülerini ve yinelenen araç çağrılarını tespit ederek
 /// gereksiz token tüketimini ve takılmaları önler.

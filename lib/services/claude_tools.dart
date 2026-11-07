@@ -1,4 +1,4 @@
-/// Claude Code Tarzı Yardımcı Araçlar ve Servisler
+/// FerIDE yardımcı araçları ve servisleri (glob, arama vb.)
 /// (Grep, Glob, Checkpoint, Geri Alma ve Otomatik Kod Doğrulama)
 library;
 

@@ -1,8 +1,8 @@
-# FerIDE v5.3 -> Claude Code Standartları Dönüşüm ve Nihai Performans Raporu
+# FerIDE v5.3 dönüşüm ve nihai performans raporu
 
 ## 1. Yönetici Özeti (Executive Summary)
 
-FerIDE'nin yerel model motoru ve ajan döngüsü baştan sona gözden geçirilerek **Claude Code** mimari standartlarına yükseltildi.
+FerIDE'nin yerel model motoru ve ajan döngüsü baştan sona gözden geçirilerek yeniden düzenlendi.
 
 | Metrik / Özellik | Başlangıç (Eski Durum) | Claude Dönüşümü Sonrası (Yeni Durum) | İyileşme Oranı |
 |---|---|---|---|
@@ -11,7 +11,7 @@ FerIDE'nin yerel model motoru ve ajan döngüsü baştan sona gözden geçiriler
 | **Önbellek Yeniden Kullanımı (KV Cache)** | `%0` (Her turda değişen system prompt) | **`%88.5+`** (Sabit sistem promptu + 8'li blok) | **Tam prefix koruması** |
 | **500 Server Hatası ("system at beginning")** | Sık sık oluşuyordu (`step >= 10`) | **Sıfır hata** (`ContextManager.validateMessageOrder`) | **%100 Çözüldü** |
 | **Ajan Takılması / Sonsuz Döngü** | İlkel sayaç sahte tool çıktısı üretiyordu | **`ProgressTracker`** (5 adım uyarı, 8 adım durdurma) | **Güvenli & Resumable** |
-| **Kod Düzenleme Güvenilirliği** | Kör `replaceFirst` (yanlış yere yazma riski) | **Kesin eşleşme + çoklu eşleşme koruması** | **Claude Code standardı** |
+| **Kod Düzenleme Güvenilirliği** | Kör `replaceFirst` (yanlış yere yazma riski) | **Kesin eşleşme + çoklu eşleşme koruması** | **Güvenli düzenleme** |
 | **Geri Alma (Rollback)** | Yok | **`CheckpointService`** (otomatik ~/.feride/checkpoints/) | **Tam güvenlik** |
 | **Kod Otomatik Doğrulama** | Yok | **`CodeValidator`** (`dart analyze` / `py_compile`) | **Self-healing yeteneği** |
 | **Görev Takibi (Task Tracking)** | Yok | **`todo_write`** + Canlı UI Todo Widget | **Canlı görsel takip** |
@@ -53,13 +53,13 @@ FerIDE'nin yerel model motoru ve ajan döngüsü baştan sona gözden geçiriler
 ### Faz 6 — ✂️ Sade Sistem Prompt & `tool_registry.dart`
 - 350+ satırlık hardcoded araç şeması bloğu `ToolRegistry` altına alındı.
 - Kodlama oturumunda alakasız borsa/finans şemaları temizlenerek token yükü hafifletildi.
-- Claude Code direktifleriyle sade, net sistem promptu oluşturuldu.
+- Sade ve net sistem promptu oluşturuldu.
 
 ### Faz 7 — 🚀 Spekülatif Çözme (MTP)
 - Qwen3.8 mimarisindeki 5 gömülü MTP katmanı `llama-server --spec-type draft-mtp` ile aktive edildi.
 - **Sonuç:** Kod üretim hızı **11.57 t/s'den 22.68 t/s'ye (1.96x katına)** fırladı!
 
-### Faz 8 — 🧰 Claude Code Özellikleri
+### Faz 8 — 🧰 Ajan özellikleri
 - `todo_write` aracı ve kullanıcı arayüzünde canlı görev ilerleme çubuğu (`_buildLiveTodoBar`).
 - `grep_search` ve `glob` arama servisleri.
 - `replace_file_content` için tam eşleşme ve belirsizlik koruması.

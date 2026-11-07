@@ -922,7 +922,7 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
                       ),
                     ),
                   ),
-                // Plan Modu Butonu (Claude Code Plan Mode)
+                // Plan Modu Butonu
                 GestureDetector(
                   onTap: () {
                     final current = ref.read(planModeProvider);
