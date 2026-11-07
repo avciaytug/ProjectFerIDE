@@ -225,7 +225,21 @@ class BackendManager {
           '-fa', 'on',
           '-ctk', 'q8_0',
           '-ctv', 'q8_0',
-          '-ngl', config.useGpu ? '999' : '0',
+          // GPU'da katman sayısı sabitlenmez: llama.cpp'nin --fit özelliği modeli
+          // GPU belleğine sığacak kadar yerleştirir, kalanını (ör. MoE uzmanları)
+          // sistem RAM'ine bırakır. '-ngl 999' --fit'i devre dışı bırakıyordu ve
+          // GPU belleğinden büyük modeller (ör. GLM-4.5-Air, 62 GB) sürücüyü
+          // çökertiyordu.
+          if (config.useGpu) ...[
+            // Masaüstü ve diğer uygulamalar için GPU belleğinde pay bırak.
+            '--fit-target', '6144',
+          ] else ...[
+            '-ngl', '0',
+          ],
+          // Vulkan'da (AMD Strix Halo gibi paylaşımlı bellek) CPU'ya kalan katmanlar
+          // varsayılan olarak sabitlenmiş "Vulkan_Host" belleğe konur; bu bellek de
+          // GPU'nun GTT sınırından yer ve sınırı aştırır. --no-host normal RAM kullanır.
+          if (config.useGpu && gpuDevice != null && gpuDevice.startsWith('Vulkan')) '--no-host',
           '-b', '2048',
           '-ub', '2048',
           '--cache-reuse', '256',

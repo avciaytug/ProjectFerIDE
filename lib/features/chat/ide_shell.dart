@@ -1701,7 +1701,7 @@ class _SettingsDialogWidgetState extends ConsumerState<SettingsDialogWidget> {
                                       fontWeight: FontWeight.bold,
                                       fontSize: 14)),
                               subtitle: Text(
-                                  'Model katmanlarını ekran kartına (-ngl 999) yükler; kapatılırsa saf CPU kullanılır.',
+                                  'Model katmanlarını ekran kartına sığdığı kadar yükler, kalanını RAM\'de çalıştırır; kapatılırsa saf CPU kullanılır.',
                                   style: TextStyle(
                                       color: secondaryTextColor, fontSize: 12)),
                               value: ref.watch(settingsProvider).useGpuForLlm,
