@@ -162,4 +162,42 @@ Available devices:
     final p = ModelLaunchPlanner.plan(modelBytes: glmAir.weightBytes, info: glmAir, hw: hw, mode: ComputeMode.auto);
     expect(p.canStart, isFalse);
   });
+
+  group('Windows dizüstü: 6 GB VRAM + 32 GB RAM (kullanıcının "4096 token" hatası)', () {
+    // Gemma 12B IQ2_M: 48 katman, 8 tam + 40 kayan pencereli (1024) dikkat katmanı.
+    const gemma12bIq2 = GgufInfo(
+      architecture: 'gemma3', blockCount: 48, contextLength: 131072, headCount: 16, headCountKv: 8,
+      embeddingLength: 3840, keyLength: 256, valueLength: 256, expertCount: 0,
+      fullKvPerToken: 65536, swaKvPerToken: 327680, slidingWindow: 1024,
+      weightBytes: 4600 * mib, expertBytes: 0, parts: ['a'],
+    );
+    final laptop = HardwareInfo(
+      ramTotalBytes: 32 * gib,
+      ramAvailableBytes: 22 * gib,
+      physicalCores: 8,
+      gpus: [GpuDevice(id: 'Vulkan0', name: 'NVIDIA GeForce RTX 4050 Laptop GPU', totalBytes: 6 * gib, freeBytes: (5.3 * gib).round())],
+      unifiedMemory: false,
+    );
+
+    test('Otomatik: bağlam 4K\'ya düşmez; en az 16K, fazlası RAM\'de (karma)', () {
+      final p = ModelLaunchPlanner.plan(modelBytes: gemma12bIq2.weightBytes, info: gemma12bIq2, hw: laptop, mode: ComputeMode.auto);
+      expect(p.canStart, isTrue);
+      expect(p.ctx, greaterThanOrEqualTo(ModelLaunchPlanner.minAgentCtx));
+      expect(p.placement, 'mixed');
+      expect(p.warnings.join(), isNot(contains('yalnızca')));
+    });
+
+    test('Yalnızca CPU da en az 16K bağlamla başlar', () {
+      final p = ModelLaunchPlanner.plan(modelBytes: gemma12bIq2.weightBytes, info: gemma12bIq2, hw: laptop, mode: ComputeMode.cpu);
+      expect(p.ctx, greaterThanOrEqualTo(ModelLaunchPlanner.minAgentCtx));
+    });
+
+    test('Belleğe gerçekten sığmayan küçük bağlam açıkça uyarılır', () {
+      final tiny = HardwareInfo(ramTotalBytes: 8 * gib, ramAvailableBytes: (10.5 * gib).round(), physicalCores: 4, gpus: const [], unifiedMemory: false);
+      final p = ModelLaunchPlanner.plan(modelBytes: gemma12bIq2.weightBytes, info: gemma12bIq2, hw: tiny, mode: ComputeMode.auto);
+      expect(p.canStart, isTrue);
+      expect(p.ctx, lessThan(ModelLaunchPlanner.minAgentCtx));
+      expect(p.warnings.join(), contains('Bağlam yalnızca'));
+    });
+  });
 }

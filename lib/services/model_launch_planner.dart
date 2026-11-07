@@ -67,6 +67,12 @@ class ModelLaunchPlanner {
   static const gib = 1 << 30;
   static const ctxSteps = [131072, 65536, 32768, 16384, 8192, 4096];
 
+  /// Ajanın rahat çalışması için en küçük bağlam. Sistem talimatı ve araç
+  /// tanımları tek başına ~4-5K token tutar; 4K bağlamda ilk mesaj bile sığmaz
+  /// ("request exceeds the available context size"). Bellek gerçekten yetmedikçe
+  /// bunun altına inilmez; bağlamın GPU'ya sığmayan kısmı RAM'de tutulur.
+  static const minAgentCtx = 16384;
+
   /// Hesaplama tamponları vb. için GPU'da ayrılan tahmini ek bellek.
   static const computeOverhead = 3 * gib ~/ 2;
 
@@ -107,6 +113,13 @@ class ModelLaunchPlanner {
     ];
     if (cands.isEmpty) cands.add(trainCtx > 0 ? math.min(4096, trainCtx) : 4096);
     final fixedCtx = requestedCtx > 0;
+    // Bu boyuta kadar olan bağlamlar, bellek yettiği sürece GPU payına bakılmadan
+    // kabul edilir (büyükten küçüğe denendiği için önce bu taban seçilir).
+    final floor = cands.firstWhere((c) => c <= minAgentCtx, orElse: () => cands.last);
+    String? smallCtxWarning(int c) => c < minAgentCtx && !fixedCtx
+        ? 'Bağlam yalnızca ${k(c)}: bellek daha fazlasına yetmiyor. FerIDE\'nin talimat ve araçları ~5K token tuttuğu '
+            'için uzun sohbetler hata verebilir; daha küçük (daha düşük kuantize) bir model seçin.'
+        : null;
 
     final gpu = hw.primaryGpu;
     final hasGpu = gpu != null && gpu.totalBytes >= 2 * gib;
@@ -132,7 +145,7 @@ class ModelLaunchPlanner {
     LaunchPlan cpuPlan({List<String> warnings = const []}) {
       for (final c in cands) {
         final need = weights + kv(c) + gib ~/ 2;
-        if (need <= ramBudget && (fixedCtx || c == cands.last || kv(c) <= ramBudget * 0.2)) {
+        if (need <= ramBudget && (fixedCtx || c <= floor || kv(c) <= ramBudget * 0.2)) {
           return LaunchPlan(
             mode: mode,
             placement: 'cpu',
@@ -142,6 +155,7 @@ class ModelLaunchPlanner {
             warnings: [
               ...warnings,
               if (fixedCtx && c < requestedCtx) 'Bağlam modelin eğitim sınırına (${k(c)}) indirildi.',
+              if (smallCtxWarning(c) != null) smallCtxWarning(c)!,
             ],
           );
         }
@@ -177,7 +191,7 @@ class ModelLaunchPlanner {
     int? fullGpuCtx;
     for (final c in cands) {
       final need = weights + kv(c) + overhead;
-      if (need <= gpuBudget && fitsTotal(need) && (fixedCtx || c == cands.last || kv(c) <= gpuBudget * 0.25)) {
+      if (need <= gpuBudget && fitsTotal(need) && (fixedCtx || c <= floor || kv(c) <= gpuBudget * 0.25)) {
         fullGpuCtx = c;
         break;
       }
@@ -204,6 +218,11 @@ class ModelLaunchPlanner {
         ctx: fullGpuCtx,
         args: [...vulkanArgs, '-ngl', nglAll, if (canFit) ...['--fit', 'off'], '-c', '$fullGpuCtx', ...threads, ...umaNoMmap],
         summary: 'Tamamı GPU\'da • bağlam ${k(fullGpuCtx)} • GPU ~${g(weights + kv(fullGpuCtx) + overhead)} GiB',
+        warnings: [
+          if (smallCtxWarning(fullGpuCtx) != null)
+            'Bağlam yalnızca ${k(fullGpuCtx)}: GPU belleği daha fazlasına yetmiyor. "Otomatik" mod bağlamın bir kısmını '
+                'RAM\'de tutarak ${k(minAgentCtx)} ve üstüne çıkabilir.',
+        ],
       );
     }
 
@@ -215,7 +234,7 @@ class ModelLaunchPlanner {
         if (gpuNeed <= gpuBudget &&
             fitsTotal(total) &&
             (hw.unifiedMemory || info.expertBytes <= ramBudget) &&
-            (fixedCtx || c == cands.last || kv(c) <= gpuBudget * 0.35)) {
+            (fixedCtx || c <= floor || kv(c) <= gpuBudget * 0.35)) {
           return LaunchPlan(
             mode: mode,
             placement: 'moe-cpu',
@@ -258,22 +277,25 @@ class ModelLaunchPlanner {
       final n = ((gpuBudget - kv(ctx) - overhead) / perLayer).floor().clamp(0, layers);
       return ['-ngl', '$n'];
     }
-    if (fullGpuCtx != null) {
-      return LaunchPlan(
-        mode: mode,
-        placement: 'gpu',
-        ctx: fullGpuCtx,
-        args: [...vulkanArgs, ...fitArgs(fullGpuCtx), '-c', '$fullGpuCtx', ...threads, ...umaNoMmap],
-        summary: 'Tamamı GPU\'da • bağlam ${k(fullGpuCtx)} • GPU ~${g(weights + kv(fullGpuCtx) + overhead)} GiB '
-            '(${g(reserve)} GiB masaüstü payı)',
-        warnings: warnings,
-      );
-    }
-    // Sığmıyor: bağlamı ölçülü tut ki GPU'da model ağırlıklarına yer kalsın.
+    LaunchPlan fullGpuPlan(int fullGpuCtx) => LaunchPlan(
+          mode: mode,
+          placement: 'gpu',
+          ctx: fullGpuCtx,
+          args: [...vulkanArgs, ...fitArgs(fullGpuCtx), '-c', '$fullGpuCtx', ...threads, ...umaNoMmap],
+          summary: 'Tamamı GPU\'da • bağlam ${k(fullGpuCtx)} • GPU ~${g(weights + kv(fullGpuCtx) + overhead)} GiB '
+              '(${g(reserve)} GiB masaüstü payı)',
+          warnings: [...warnings, if (smallCtxWarning(fullGpuCtx) != null) smallCtxWarning(fullGpuCtx)!],
+        );
+    // Tamamı GPU'ya ancak çok küçük bir bağlamla sığıyorsa (ör. 6 GB ekran kartı)
+    // karma yerleşim tercih edilir: biraz daha yavaş ama ajan gerçekten çalışır.
+    if (fullGpuCtx != null && (fullGpuCtx >= floor || fixedCtx)) return fullGpuPlan(fullGpuCtx);
+    // Sığmıyor: bağlamı ölçülü tut ki GPU'da model ağırlıklarına yer kalsın;
+    // ama ajan için gereken tabanın (16K) altına, bellek yettiği sürece inme.
     for (final c in cands) {
       final total = weights + kv(c) + overhead;
-      final small = fixedCtx || c == cands.last || (kv(c) <= gpuBudget * 0.08 && c <= 32768);
+      final small = fixedCtx || c <= floor || (kv(c) <= gpuBudget * 0.08 && c <= 32768);
       if (small && fitsTotal(total)) {
+        if (fullGpuCtx != null && c <= fullGpuCtx) return fullGpuPlan(fullGpuCtx);
         final onGpu = math.max(0, gpuBudget - kv(c) - overhead);
         final pct = (math.min(onGpu, weights) * 100 / weights).round();
         return LaunchPlan(
@@ -283,7 +305,7 @@ class ModelLaunchPlanner {
           args: [...vulkanArgs, ...fitArgs(c), '-c', '$c', ...threads, if (gpu.isVulkan) ...noHost, ...umaNoMmap],
           summary: 'GPU + RAM karma • modelin ~%$pct\'i GPU\'da, kalanı RAM\'de • bağlam ${k(c)} • '
               '${g(reserve)} GiB masaüstü payı',
-          warnings: [...warnings, if (raiseHint != null) raiseHint],
+          warnings: [...warnings, if (raiseHint != null) raiseHint, if (smallCtxWarning(c) != null) smallCtxWarning(c)!],
         );
       }
     }

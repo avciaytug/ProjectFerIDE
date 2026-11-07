@@ -54,3 +54,6 @@ app.*.map.json
 Chats/
 *.bak
 *.bak2
+
+# Zip hazırlanırken yazılır (Windows: kaynak/derleme sürüm karşılaştırması)
+KAYNAK_SURUMU.txt

@@ -170,6 +170,16 @@ if (!(Test-Path $LlamaExe)) {
 Write-Host "[5/5] FerIDE Windows uygulaması hazırlanıyor..." -ForegroundColor Blue
 $ReleaseDir = Join-Path $AppDir "build\windows\x64\runner\Release"
 $WinExe = Join-Path $ReleaseDir "feride_v5_2.exe"
+# Zip'teki kaynak sürümü; derlenen uygulamanın yanına da yazılır. Yeni bir zip eski
+# klasörün üzerine açıldığında eski .exe'nin çalışmaya devam etmesini önler.
+$SourceStamp = Join-Path $AppDir "KAYNAK_SURUMU.txt"
+$BuiltStamp = Join-Path $ReleaseDir "KAYNAK_SURUMU.txt"
+function Test-AppCurrent {
+    if (!(Test-Path $WinExe)) { return $false }
+    if (!(Test-Path $SourceStamp)) { return $true }
+    if (!(Test-Path $BuiltStamp)) { return $false }
+    return ((Get-Content $SourceStamp -Raw).Trim() -eq (Get-Content $BuiltStamp -Raw).Trim())
+}
 
 function Confirm-Step([string]$Question) {
     if ($Autonomous) { return $true }
@@ -288,12 +298,14 @@ function Build-FerideWindows {
     }
     New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
     & robocopy (Join-Path $Src "build\windows\x64\runner\Release") $ReleaseDir /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+    if (Test-Path $SourceStamp) { Copy-Item $SourceStamp -Destination $BuiltStamp -Force }
     return Test-Path $WinExe
 }
 
-if (Test-Path $WinExe) {
+if (Test-AppCurrent) {
     Write-Host "  [OK] FerIDE Windows uygulaması hazır." -ForegroundColor Green
 } else {
+    if (Test-Path $WinExe) { Write-Host "  Kaynak kod güncellenmiş; uygulama yeniden derlenecek." -ForegroundColor Yellow }
     Write-Host "  FerIDE uygulaması bu bilgisayarda bir kez derlenecek. Eksikse Git, Flutter SDK ve" -ForegroundColor Yellow
     Write-Host "  Visual Studio C++ Build Tools kurulur (toplam ~6-8 GB indirme, yalnızca ilk sefer)." -ForegroundColor Yellow
     $ready = (Test-VisualCpp) -and ($null -ne (Find-Flutter))

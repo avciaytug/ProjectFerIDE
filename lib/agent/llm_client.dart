@@ -393,7 +393,8 @@ class LlmClient {
       return 'Görsel desteği yok: model Vision (mmproj) eklentisi olmadan başlatılmış. Modeli mmproj ile yeniden başlatın.';
     }
     if (lower.contains('context') && (lower.contains('exceed') || lower.contains('too long') || lower.contains('n_ctx'))) {
-      return 'Bağlam sınırı aşıldı: sohbet modelin bağlam penceresinden büyük. Yeni sohbet başlatın veya daha büyük --ctx-size kullanın. ($detail)';
+      return 'Bağlam sınırı aşıldı: sohbet, modelin başlatıldığı bağlam boyutuna sığmıyor. '
+          'Yeni sohbet başlatın ya da Ayarlar > Genel > Model Çalıştırma\'dan bağlamı büyütüp (en az 16K) modeli yeniden başlatın. ($detail)';
     }
     return 'Model sunucusu hata döndürdü [HTTP $status]: $detail';
   }
