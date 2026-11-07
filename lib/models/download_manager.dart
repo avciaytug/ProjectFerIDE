@@ -643,21 +643,10 @@ class DownloadController extends StateNotifier<DownloadTask?> {
     } catch (_) {}
 
     if (primaryFile != null && primaryFile.isNotEmpty) {
-      // Bölünmüş GGUF ise parça ekini (-00001-of-00002.gguf) normalize et
-      String cleanModelName = p.basename(primaryFile);
-      final splitMatch = RegExp(r'-(\d{4,})-of-(\d{4,})\.gguf$', caseSensitive: false)
-          .firstMatch(cleanModelName);
-      if (splitMatch != null) {
-        cleanModelName = cleanModelName.substring(0, splitMatch.start);
-      }
-
-      final notifier = _ref.read(selectedModelProvider.notifier);
-      notifier.setModel(cleanModelName);
-
-      // Eğer şu an hiçbir model çalışmıyorsa yeni inen modeli otomatik ayağa kaldır!
-      final isRunning = _ref.read(isBackendRunningProvider);
-      if (!isRunning) {
-        unawaited(notifier.switchModel(cleanModelName));
+      // Hiçbir model çalışmıyor ve yüklenmiyorsa yeni ineni seçip başlat. Bir model
+      // çalışırken seçimi değiştirmek, başlıkta çalışmayan bir modeli gösteriyordu.
+      if (!_ref.read(isBackendRunningProvider) && !_ref.read(isModelSwitchingProvider)) {
+        unawaited(_ref.read(selectedModelProvider.notifier).switchModel(modelDisplayName(primaryFile)));
       }
     }
   }

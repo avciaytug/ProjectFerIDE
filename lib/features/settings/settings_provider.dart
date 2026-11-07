@@ -154,12 +154,29 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     return p.join(AppPaths.ferideDataDir, 'Chats');
   }
 
+  /// MCP yapılandırması her zaman kullanıcı veri klasöründe tutulur. Uygulama
+  /// klasöründeki mcp_config.json yalnızca ilk açılışta kopyalanan bir şablondur:
+  /// eskiden doğrudan o dosya kullanılıp içine bu makineye özgü mutlak yollar
+  /// yazılıyordu; yedek başka bir bilgisayara (Windows/macOS) taşınınca MCP
+  /// sunucuları bozuluyordu.
   static String _defaultMcpPath() {
     final userMcp = p.join(AppPaths.ferideDataDir, 'mcp_config.json');
-    if (File(userMcp).existsSync()) return userMcp;
-    final appMcp = p.join(AppPaths.appRoot, 'mcp_config.json');
-    if (File(appMcp).existsSync()) return appMcp;
+    if (!File(userMcp).existsSync()) {
+      try {
+        final template = File(p.join(AppPaths.appRoot, 'mcp_config.json'));
+        if (template.existsSync()) {
+          Directory(AppPaths.ferideDataDir).createSync(recursive: true);
+          template.copySync(userMcp);
+        }
+      } catch (_) {}
+    }
     return userMcp;
+  }
+
+  static String _mcpPathFrom(String? saved) {
+    final template = p.join(AppPaths.appRoot, 'mcp_config.json');
+    if (saved == null || saved.trim().isEmpty || p.equals(saved, template)) return _defaultMcpPath();
+    return saved;
   }
 
   SettingsNotifier(this.prefs)
@@ -181,7 +198,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
           customLlamaServerPath: prefs.getString('customLlamaServerPath') ?? '',
           hfToken: prefs.getString('hfToken') ?? '',
           mcpEnabled: prefs.getBool('mcpEnabled') ?? true,
-          mcpConfigPath: prefs.getString('mcpConfigPath') ?? _defaultMcpPath(),
+          mcpConfigPath: _mcpPathFrom(prefs.getString('mcpConfigPath')),
           mcpAutoDiscover: prefs.getBool('mcpAutoDiscover') ?? true,
           mcpTimeoutSeconds: prefs.getInt('mcpTimeoutSeconds') ?? 60,
           disabledMcpServers: prefs.getStringList('disabledMcpServers') ?? [],

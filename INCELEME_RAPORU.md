@@ -59,6 +59,18 @@ Kullanıcının uygulamada GLM, Huihui 27B ve Qwen 35B arasında yaptığı geç
   - Parantez gibi karakterler kaçışlanmıyordu; Windows yol ayırıcısı desteklenmiyordu.
   - Doğru glob anlamıyla yeniden yazıldı.
 
+### Model seçimi: "GLM'i seçiyorum, başka model geliyor" (düzeltildi)
+Üç ayrı hata aynı belirtiyi veriyordu:
+1. **Menü yanlış modeli gösteriyordu.** Seçili modelin adı listedeki adla birebir tutmayınca (bölünmüş GLM dosyası) menü listenin ilk modelini, yani gemma'yı gösteriyordu. Model aslında GLM'di. Artık menü her zaman seçili ya da çalışan modeli gösteriyor.
+2. **Yükleme sırasında seçim geri dönüyordu.** Seçim her değiştiğinde arka planda sunucuyla eşitleme tetikleniyordu. Kapatılmakta olan eski sunucu hâlâ yanıt verdiği için seçim eski modele çevriliyordu; GLM yüklenemezse sonraki ▶ eski modeli açıyordu. Artık yükleme sürerken eşitleme yapılmıyor; geç gelen yanıtlar da yok sayılıyor.
+3. **Bulunamayan model yerine başka model yükleniyordu.** Seçilen model diskte bulunamazsa uygulama sessizce diskteki ilk modeli yüklüyordu. Artık hiçbir şey yüklenmiyor ve nedeni yazılıyor.
+- Ek olarak: Bir model çalışırken indirme bitince seçim yeni modele geçmiyor. İndirme kartındaki "Çalıştır" artık inen modeli çalıştırıyor.
+- `test/model_switch_test.dart`, gerçek seçim kodunu sahte bir llama-server ile çalıştırıyor. Bu test eski kodda başarısız oluyordu, yeni kodda geçiyor.
+
+### MCP yapılandırmasının yeri (düzeltildi)
+- Kullanıcı klasöründe yapılandırma yoksa uygulama, kendi klasöründeki şablon `mcp_config.json`'u doğrudan kullanıp içine bu makineye özgü mutlak yollar yazıyordu. Yedek Windows/macOS'a taşınınca bu yollar bozuk kalırdı.
+- Şablon artık ilk açılışta `~/.feride/mcp_config.json`'a kopyalanıyor ve hiç değiştirilmiyor.
+
 ### Skill'ler
 - Diskten senkronizasyon fonksiyonu hiç çağrılmıyordu: `~/.feride/skills` altındaki **17 skill'in yalnızca 5'i** ajana görünüyordu. Artık açılışta senkronize ediliyor.
 - Kayıt sorgusunda sütun kayması vardı: kullanım sayacına tarih, oluşturulma tarihine 0 yazılıyordu. Düzeltildi; eski kayıtlar otomatik onarılıyor.

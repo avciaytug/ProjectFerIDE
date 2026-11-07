@@ -63,12 +63,36 @@ final apiUrlProvider = Provider<String>((ref) {
 
 /// Sunucunun bildirdiği model kimliğini (tam yol olabilir) model listesindeki ada çevirir:
 /// "…/GLM-4.5-Air-Q4_K_S-00001-of-00002.gguf" → "GLM-4.5-Air-Q4_K_S".
-String modelDisplayName(String idOrPath) => _ggufDisplayName(p.basename(idOrPath.replaceAll('\\', '/')));
+/// GGUF olmayan adlar (Ollama "hf.co/kisi/depo:Q4", vLLM "Qwen/Qwen3-8B") olduğu gibi kalır.
+String modelDisplayName(String idOrPath) {
+  final s = idOrPath.replaceAll('\\', '/');
+  if (!s.toLowerCase().endsWith('.gguf')) return idOrPath;
+  return _ggufDisplayName(p.basename(s));
+}
 
 /// İki model adı aynı modeli mi gösteriyor (yol, .gguf ve parça eki yok sayılır)?
 bool sameModel(String a, String b) {
   String k(String s) => modelDisplayName(s).toLowerCase().replaceFirst(RegExp(r'\.gguf$'), '');
   return k(a) == k(b);
+}
+
+/// Diskteki [fileName], seçilen [modelName] (görünen ad, dosya adı ya da tam yol)
+/// için llama-server'a verilecek dosya mı? Bölünmüş GGUF'ta yalnızca 1. parça.
+bool isLaunchFileFor(String fileName, String modelName) {
+  if (!fileName.toLowerCase().endsWith('.gguf') || isAuxiliaryGgufFile(fileName)) return false;
+  final split = _splitGgufInfo(fileName);
+  if (split != null && split['part'] != 1) return false;
+  return sameModel(fileName, modelName);
+}
+
+/// Başlıktaki model menüsünün değeri: seçili/çalışan modelin listedeki karşılığı;
+/// listede yoksa modelin kendi adı. Asla başka bir modeli göstermez (eskiden
+/// eşleşmeyince listenin ilkini, yani gemma'yı gösteriyordu).
+String headerModelValue(List<String> models, String selected) {
+  for (final m in models) {
+    if (sameModel(m, selected)) return m;
+  }
+  return modelDisplayName(selected);
 }
 
 /// Yardımcı: mmproj, vocab, imatrix veya mtp draft dosyalarını ana model listesinden ayıklar
@@ -267,12 +291,16 @@ final availableModelsProvider = FutureProvider<List<String>>((ref) async {
 class SelectedModelNotifier extends Notifier<String> {
   @override
   String build() {
+    // Kayıtlı tercih yalnızca açılışta okunur (watch değil): seçimi bu sınıf yönetir
+    // ve tercihe kendisi yazar. watch, her seçimde build()'i yeniden çalıştırıp
+    // sunucuyla eşitlemeyi tetikliyor; yükleme sürerken hâlâ yanıt veren ESKİ
+    // sunucu seçimi geri çeviriyordu ("GLM'i seçtim, başka model geldi").
     String? preferred;
     try {
-      preferred = ref.watch(settingsProvider.select((s) => s.preferredModel));
+      preferred = ref.read(settingsProvider).preferredModel;
     } catch (_) {}
     final initial = (preferred != null && preferred.isNotEmpty)
-        ? (preferred.startsWith('Model İndirin') ? preferred : modelDisplayName(preferred))
+        ? (_isPlaceholder(preferred) ? preferred : modelDisplayName(preferred))
         : 'Model İndirin (Ayarlar > Model Merkezi)';
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
       Future.microtask(() => syncWithRunningServer(ref.read(apiUrlProvider)));
@@ -280,7 +308,10 @@ class SelectedModelNotifier extends Notifier<String> {
     return initial;
   }
 
-  void setModel(String modelName) {
+  static bool _isPlaceholder(String name) => name.startsWith('Model İndirin') || name.contains('Fallback');
+
+  /// Seçimi değiştirir ve bir sonraki açılış için kaydeder.
+  void _select(String modelName) {
     state = modelName;
     try {
       ref.read(settingsProvider.notifier).setPreferredModel(modelName);
@@ -302,47 +333,32 @@ class SelectedModelNotifier extends Notifier<String> {
     return null;
   }
 
+  /// Arayüzü çalışan sunucuyla eşitler (ör. FerIDE'den önce açılmış bir sunucuyu
+  /// açılışta tanır). Bir model yüklenirken hiçbir şey yapmaz: o sırada yanıt veren,
+  /// kapatılmakta olan ESKİ sunucudur ve onunla eşitlemek seçimi geri çeviriyordu.
   Future<void> syncWithRunningServer([String? apiUrl]) async {
+    if (_loadingFuture != null) return;
+    final seq = _loadSeq;
     final runningModel = await fetchRunningServerModel(apiUrl);
+    // Yanıt beklenirken bir yükleme başladıysa bu bilgi artık eskidir.
+    if (_loadingFuture != null || seq != _loadSeq) return;
     if (runningModel != null && runningModel.isNotEmpty) {
-      // Sunucu tam yolu (ve bölünmüş modelde -00001-of-0000N.gguf parçasını) bildirir;
-      // listede ise parça eki atılmış ad kullanılır. Aynı ada çevrilmezse açılır menü
-      // yanlış modeli gösterir ve yeniden seçmek modeli baştan yükletirdi.
-      final fileName = modelDisplayName(runningModel);
-      if (!sameModel(state, fileName)) {
-        state = fileName;
-        try { ref.read(settingsProvider.notifier).setPreferredModel(fileName); } catch (_) {}
-      }
+      // Sunucu tam yolu (bölünmüş modelde 1. parçayı) bildirir; listedeki ada çevrilir.
+      final name = modelDisplayName(runningModel);
+      if (!sameModel(state, name)) _select(name);
       ref.read(isBackendRunningProvider.notifier).state = true;
-    } else {
-      // Sunucu şu an çalışmıyorsa ve seçili model "Model İndirin..." ise diskteki ilk GGUF'ı otomatik seç
-      if ((state.startsWith('Model İndirin') || state.contains('Fallback'))) {
-        try {
-          for (final dirPath in getModelScanDirs()) {
-            final d = Directory(dirPath);
-            if (!d.existsSync()) continue;
-            for (final ent in d.listSync(recursive: true)) {
-              final name = p.basename(ent.path);
-              if ((ent is File || ent is Link) &&
-                  name.toLowerCase().endsWith('.gguf') &&
-                  !isAuxiliaryGgufFile(name) &&
-                  _isModelComplete(ent, name)) {
-                final disp = _ggufDisplayName(name);
-                state = disp;
-                try { ref.read(settingsProvider.notifier).setPreferredModel(disp); } catch (_) {}
-                break;
-              }
-            }
-            if (!state.startsWith('Model İndirin')) break;
-          }
-        } catch (_) {}
-      }
-      ref.read(isBackendRunningProvider.notifier).state = false;
+      return;
+    }
+    ref.read(isBackendRunningProvider.notifier).state = false;
+    // Henüz hiç model seçilmemişse diskteki ilk tam GGUF'ı seç (başlatmaz).
+    if (_isPlaceholder(state)) {
+      final first = _firstLocalModel();
+      if (first != null) _select(first);
     }
   }
 
   Future<void> switchModel(String newModelName) async {
-    if (newModelName.startsWith('Model İndirin')) return;
+    if (_isPlaceholder(newModelName)) return;
     if (sameModel(state, newModelName) && ref.read(isBackendRunningProvider)) return;
 
     // Aynı model zaten yükleniyorsa yüklemeyi öldürüp baştan başlatma.
@@ -350,14 +366,12 @@ class SelectedModelNotifier extends Notifier<String> {
       return _loadingFuture;
     }
 
-    state = newModelName;
-    try { ref.read(settingsProvider.notifier).setPreferredModel(newModelName); } catch (_) {}
-
-    await _runLoad(newModelName, () async {
-      final backendManager = ref.read(backendManagerProvider);
-      await backendManager.stopBackend();
+    _select(newModelName);
+    await _runLoad(newModelName, (superseded) async {
+      await ref.read(backendManagerProvider).stopBackend();
       await Future.delayed(const Duration(seconds: 1));
-      await _startModelInternal(newModelName);
+      if (superseded()) return; // bu arada başka bir model seçildi
+      await _startModelInternal(newModelName, superseded);
     });
   }
 
@@ -368,21 +382,22 @@ class SelectedModelNotifier extends Notifier<String> {
   Future<void>? _loadingFuture;
   int _loadSeq = 0;
 
-  Future<void> _runLoad(String modelName, Future<void> Function() body) async {
-    // Tanılama: model yükleme isteğini kimin yaptığı (çift başlatma sorunlarını bulmak için).
-    final caller = StackTrace.current.toString().split('\n').skip(1).take(4).map((l) => l.trim()).join(' <- ');
-    print('[SelectedModelNotifier] yükleme isteği: $modelName (süren: $_loadingModel) çağıran: $caller');
+  /// [body], kendisinden sonra başka bir yükleme başladıysa `superseded()` ile
+  /// bunu öğrenir ve arayüze (seçim, bağlam boyutu) dokunmadan çıkar.
+  Future<void> _runLoad(String modelName, Future<void> Function(bool Function() superseded) body) async {
     if (_loadingFuture != null && _loadingModel != null && sameModel(_loadingModel!, modelName)) return _loadingFuture;
     final seq = ++_loadSeq;
+    final done = Completer<void>();
     _loadingModel = modelName;
+    _loadingFuture = done.future;
     ref.read(isModelSwitchingProvider.notifier).state = true;
-    final fut = body();
-    _loadingFuture = fut;
+    print('[SelectedModelNotifier] yükleniyor: $modelName');
     try {
-      await fut;
+      await body(() => seq != _loadSeq);
     } catch (e) {
       print('[SelectedModelNotifier] model yükleme hatası: $e');
     } finally {
+      done.complete();
       if (seq == _loadSeq) {
         _loadingFuture = null;
         _loadingModel = null;
@@ -394,137 +409,145 @@ class SelectedModelNotifier extends Notifier<String> {
   Future<void> startModel() async {
     if (_loadingFuture != null) return _loadingFuture;
     final runningModel = await fetchRunningServerModel();
+    if (_loadingFuture != null) return _loadingFuture; // yanıt beklenirken yükleme başladı
     if (runningModel != null && runningModel.isNotEmpty) {
-      final fileName = modelDisplayName(runningModel);
-      state = fileName;
+      final name = modelDisplayName(runningModel);
+      if (!sameModel(state, name)) _select(name);
       ref.read(isBackendRunningProvider.notifier).state = true;
-      try { ref.read(settingsProvider.notifier).setPreferredModel(fileName); } catch (_) {}
       return;
     }
 
     final targetModel = state;
-    await _runLoad(targetModel, () => _startModelInternal(targetModel));
+    await _runLoad(targetModel, (superseded) => _startModelInternal(targetModel, superseded));
   }
 
-  Future<void> _startModelInternal(String modelName) async {
+  Future<void> _startModelInternal(String modelName, bool Function() superseded) async {
     final backendManager = ref.read(backendManagerProvider);
     final settings = ref.read(settingsProvider);
+    final status = ref.read(lastBackendStatusMessageProvider.notifier);
 
-    if (settings.backendEngine == 'ollama') {
+    if (settings.backendEngine == 'ollama' || settings.backendEngine == 'vllm') {
+      final ollama = settings.backendEngine == 'ollama';
+      final port = ollama ? 11434 : 8000;
       await backendManager.startBackend(BackendConfig(
-        type: BackendType.ollama,
-        executablePath: 'ollama',
+        type: ollama ? BackendType.ollama : BackendType.vllm,
+        executablePath: settings.backendEngine,
         modelPathOrName: modelName,
-        port: 11434,
+        port: port,
         computeMode: settings.computeMode,
       ));
-      await syncWithRunningServer('http://127.0.0.1:11434/v1');
+      if (!superseded()) await _confirmStarted(modelName, 'http://127.0.0.1:$port/v1', superseded);
       return;
     }
 
-    if (settings.backendEngine == 'vllm') {
-      await backendManager.startBackend(BackendConfig(
-        type: BackendType.vllm,
-        executablePath: 'vllm',
-        modelPathOrName: modelName,
-        port: 8000,
-        computeMode: settings.computeMode,
-      ));
-      await syncWithRunningServer('http://127.0.0.1:8000/v1');
-      return;
-    }
-
-    final dirsToScan = getModelScanDirs();
-    String? absoluteModelPath;
-    try {
-      for (var dirPath in dirsToScan) {
-        if (absoluteModelPath != null) break;
-        final dir = Directory(dirPath);
-        if (await dir.exists()) {
-          await for (var entity in dir.list(recursive: true).handleError((_) {})) {
-            final name = p.basename(entity.path);
-            if ((entity is File || entity is Link) && !isAuxiliaryGgufFile(name)) {
-              bool match = name == modelName;
-              if (!match && _splitGgufInfo(name) != null) {
-                final info = _splitGgufInfo(name)!;
-                if (info['base'] == modelName && info['part'] == 1) {
-                  match = true;
-                }
-              }
-              if (match) {
-                absoluteModelPath = entity.path;
-                if (entity is Link) {
-                  absoluteModelPath = await entity.resolveSymbolicLinks();
-                }
-                break;
-              }
-            }
-          }
-        }
+    // Henüz model seçilmemişse (ilk açılış) diskteki ilk tam modeli seç.
+    if (_isPlaceholder(modelName)) {
+      final first = _firstLocalModel();
+      if (first == null) {
+        status.state = 'Henüz indirilmiş yerel GGUF modeli bulunamadı. Lütfen Ayarlar > Model Merkezi sekmesinden bir model indirin.';
+        return;
       }
-    } catch (_) {}
-
-    if (absoluteModelPath == null) {
-      // Otomatik model keşfi: İlk bulunan gerçek GGUF modelini bağla
-      try {
-        for (var dirPath in dirsToScan) {
-          if (absoluteModelPath != null) break;
-          final dir = Directory(dirPath);
-          if (await dir.exists()) {
-            await for (var entity in dir.list(recursive: true).handleError((_) {})) {
-              final name = p.basename(entity.path);
-              final pathLower = name.toLowerCase();
-              if ((entity is File || entity is Link) &&
-                  pathLower.endsWith('.gguf') &&
-                  !isAuxiliaryGgufFile(name)) {
-                if (!_isModelComplete(entity, name)) continue;
-                absoluteModelPath = entity.path;
-                if (entity is Link) {
-                  absoluteModelPath = await entity.resolveSymbolicLinks();
-                }
-                final disp = _ggufDisplayName(name);
-                state = disp;
-                try { ref.read(settingsProvider.notifier).setPreferredModel(disp); } catch (_) {}
-                break;
-              }
-            }
-          }
-        }
-      } catch (_) {}
+      modelName = first;
+      _select(first);
     }
 
-    if (absoluteModelPath == null) {
-      ref.read(lastBackendStatusMessageProvider.notifier).state =
-          'Henüz indirilmiş yerel GGUF modeli bulunamadı. Lütfen Ayarlar > Model Merkezi sekmesinden bir model indirin.';
+    final modelPath = await _findModelFile(modelName);
+    if (superseded()) return;
+    if (modelPath == null) {
+      // Seçilenin yerine sessizce diskteki ilk modeli yüklemek yerine nedenini söyle.
+      status.state = '"${modelDisplayName(modelName)}" diskte bulunamadı (silinmiş ya da indirmesi yarım kalmış olabilir). '
+          'Ayarlar > Model Merkezi\'nden indirin ya da başka bir model seçin.';
+      ref.read(isBackendRunningProvider.notifier).state = false;
       return;
     }
 
-    // llama-server yolunu çöz; eksikse otonom olarak indirip kur!
+    // llama-server yolunu çöz; eksikse otonom olarak indirip kur.
     String? llamaExe = AppPaths.resolveLlamaServer(customPath: settings.customLlamaServerPath);
     if (llamaExe == null) {
-      ref.read(lastBackendStatusMessageProvider.notifier).state =
-          'llama-server bulunamadı; otonom kurulum başlatılıyor...';
-      final installed = await ref
-          .read(systemInstallerProvider.notifier)
-          .installOrUpdateLlamaCpp(flavor: 'vulkan');
+      status.state = 'llama-server bulunamadı; otonom kurulum başlatılıyor...';
+      final installed = await ref.read(systemInstallerProvider.notifier).installOrUpdateLlamaCpp(flavor: 'vulkan');
       if (installed) {
         llamaExe = AppPaths.resolveLlamaServer(customPath: settings.customLlamaServerPath);
       }
+      if (superseded()) return;
     }
 
     await backendManager.startBackend(BackendConfig(
       type: BackendType.llamaCpp,
       executablePath: llamaExe ?? p.join(AppPaths.appRoot, 'bin', 'llama-cpp', AppPaths.exeName('llama-server')),
-      modelPathOrName: absoluteModelPath,
+      modelPathOrName: modelPath,
       contextSize: settings.contextSetting,
       computeMode: settings.computeMode,
     ));
+    if (superseded()) return;
     // Planlayıcının seçtiği gerçek bağlam boyutu (kenar çubuğundaki "x / 32K token").
     final plan = ref.read(lastLaunchPlanProvider);
     if (plan != null && plan.canStart && ref.read(isBackendRunningProvider)) {
       ref.read(maxContextSizeProvider.notifier).state = plan.ctx;
     }
-    await syncWithRunningServer();
+    await _confirmStarted(modelName, null, superseded);
+  }
+
+  /// Kendi başlattığımız modelin ayağa kalktığını doğrular. Seçim kullanıcının
+  /// seçtiği model olarak kalır; sunucu yanıt vermiyorsa yalnızca "çalışmıyor"
+  /// işaretlenir (nedenini BackendManager'ın durum mesajı söyler).
+  Future<void> _confirmStarted(String modelName, String? apiUrl, bool Function() superseded) async {
+    final running = await fetchRunningServerModel(apiUrl);
+    if (superseded()) return;
+    if (running == null || running.isEmpty) {
+      ref.read(isBackendRunningProvider.notifier).state = false;
+      return;
+    }
+    // llama-server tek model sunar: yanıt veren başka bir modelse (ör. porttaki,
+    // FerIDE dışından açılmış bir sunucu) arayüz gerçeği göstermeli. Ollama tüm
+    // yerel modelleri listelediği için orada bu karşılaştırma yapılmaz.
+    if (apiUrl == null && !sameModel(running, modelName)) {
+      _select(modelDisplayName(running));
+      ref.read(lastBackendStatusMessageProvider.notifier).state =
+          '"${modelDisplayName(modelName)}" başlatılamadı; sunucuda şu an "${modelDisplayName(running)}" çalışıyor.';
+    }
+    ref.read(isBackendRunningProvider.notifier).state = true;
+  }
+
+  /// Seçilen modelin yüklenecek dosyası (bölünmüşse 1. parça), bağlantılar çözülmüş.
+  /// Aynı ada uyan birden çok dosya varsa adı birebir tutan tercih edilir.
+  static Future<String?> _findModelFile(String modelName) async {
+    if (p.isAbsolute(modelName) && File(modelName).existsSync()) return modelName;
+    String? close;
+    for (final dirPath in getModelScanDirs()) {
+      final dir = Directory(dirPath);
+      if (!await dir.exists()) continue;
+      try {
+        await for (final entity in dir.list(recursive: true).handleError((_) {})) {
+          final name = p.basename(entity.path);
+          if (!(entity is File || entity is Link) || !isLaunchFileFor(name, modelName)) continue;
+          final path = entity is Link ? await entity.resolveSymbolicLinks() : entity.path;
+          if (modelDisplayName(name) == modelDisplayName(modelName)) return path;
+          close ??= path;
+        }
+      } catch (_) {}
+    }
+    return close;
+  }
+
+  /// Diskteki ilk tam (indirmesi bitmiş) GGUF modelinin görünen adı.
+  static String? _firstLocalModel() {
+    for (final dirPath in getModelScanDirs()) {
+      try {
+        final d = Directory(dirPath);
+        if (!d.existsSync()) continue;
+        for (final ent in d.listSync(recursive: true)) {
+          final name = p.basename(ent.path);
+          if ((ent is File || ent is Link) &&
+              name.toLowerCase().endsWith('.gguf') &&
+              !isAuxiliaryGgufFile(name) &&
+              _isModelComplete(ent, name)) {
+            return _ggufDisplayName(name);
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
   }
 
   Future<void> toggleModel() async {

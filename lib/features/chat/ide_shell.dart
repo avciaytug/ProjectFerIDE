@@ -298,9 +298,11 @@ class _IdeShellState extends ConsumerState<IdeShell> {
                         final isRunning = ref.watch(isBackendRunningProvider);
                         final isSwitching = ref.watch(isModelSwitchingProvider);
 
-                        final currentVal = models.contains(selectedModel)
-                            ? selectedModel
-                            : models.first;
+                        // Her zaman gerçekten seçili/çalışan model gösterilir (eskiden ad
+                        // eşleşmeyince listenin ilki, yani gemma görünüyordu); listede
+                        // yoksa menüye eklenir.
+                        final currentVal = headerModelValue(models, selectedModel);
+                        if (!models.contains(currentVal)) models = [currentVal, ...models];
 
                         return Row(
                           mainAxisSize: MainAxisSize.min,
@@ -349,7 +351,7 @@ class _IdeShellState extends ConsumerState<IdeShell> {
                               onChanged: isSwitching
                                   ? null
                                   : (val) {
-                                      if (val != null && val != selectedModel) {
+                                      if (val != null && !sameModel(val, selectedModel)) {
                                         ref
                                             .read(selectedModelProvider.notifier)
                                             .switchModel(val);
@@ -3173,8 +3175,8 @@ class FloatingDownloadBar extends ConsumerWidget {
               ] else if (download.status == DownloadStatus.completed) ...[
                 TextButton.icon(
                   onPressed: () {
-                    final target = ref.read(selectedModelProvider);
-                    ref.read(selectedModelProvider.notifier).switchModel(target);
+                    // İnen modeli çalıştır (eskiden o an seçili olanı çalıştırıyordu).
+                    ref.read(selectedModelProvider.notifier).switchModel(modelDisplayName(download.fileName));
                   },
                   icon: const Icon(Icons.play_arrow_rounded,
                       color: Colors.greenAccent, size: 18),
