@@ -17,6 +17,20 @@ foreach ($sd in $SubDirs) {
     if (!(Test-Path $full)) { New-Item -ItemType Directory -Path $full -Force | Out-Null }
 }
 
+# Her adım bu dosyaya da yazılır; sorun olursa bu günlüğü paylaşın.
+$LogFile = Join-Path $FerideHome "logs\kurulum_windows.log"
+try { Start-Transcript -Path $LogFile -Append | Out-Null } catch {}
+
+# Tarayıcıdan indirilen zip'ten çıkan dosyalar "İnternetten geldi" işaretlidir;
+# Windows bu yüzden .bat/.ps1/.py dosyalarını engelleyebilir ya da uyarı gösterir.
+Get-ChildItem -LiteralPath $AppDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notlike "*\build\*" -and $_.FullName -notlike "*\models\*" } |
+    Unblock-File -ErrorAction SilentlyContinue
+
+function Update-SessionPath {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+}
+
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host "  FerIDE Beta v5.3.8 — Windows Otonom Kurulum Sihirbazı         " -ForegroundColor Cyan
 Write-Host "  Konum: $AppDir" -ForegroundColor Cyan
@@ -77,8 +91,7 @@ if (($null -eq (Get-Command aria2c -ErrorAction SilentlyContinue)) -and $HasWing
     winget install -e --id aria2.aria2 --accept-package-agreements --accept-source-agreements --silent
 }
 
-# PATH yenile
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+Update-SessionPath
 
 # 3. Python Sanal Ortamı (~/.feride/venv) + STT/TTS & Evrensel Dosya Kütüphaneleri
 Write-Host "[3/5] Python sanal ortamı ($FerideHome\venv) ve STT/Ofis paketleri kuruluyor..." -ForegroundColor Blue
@@ -150,85 +163,183 @@ if (!(Test-Path $LlamaExe)) {
     Write-Host "  [OK] Windows llama-server.exe hazır." -ForegroundColor Green
 }
 
-# 5. Windows Release İkilisi Kontrolü & Masaüstü Kısayolu
-Write-Host "[5/5] FerIDE Windows uygulaması ve Masaüstü kısayolu hazırlanıyor..." -ForegroundColor Blue
-$WinExe = Join-Path $AppDir "build\windows\x64\runner\Release\feride_v5_2.exe"
+# 5. FerIDE Windows uygulaması (feride_v5_2.exe)
+# Flutter masaüstü uygulamaları yalnızca hedef işletim sisteminde derlenebilir;
+# bu yüzden .exe bu bilgisayarda bir kez derlenir. Gerekenler: Git, Flutter SDK,
+# Visual Studio C++ Build Tools ve Windows Geliştirici Modu (eklenti sembolik bağları).
+Write-Host "[5/5] FerIDE Windows uygulaması hazırlanıyor..." -ForegroundColor Blue
+$ReleaseDir = Join-Path $AppDir "build\windows\x64\runner\Release"
+$WinExe = Join-Path $ReleaseDir "feride_v5_2.exe"
 
-function Install-FlutterToolchain {
-    # Windows .exe yalnızca Windows'ta derlenebilir: Git + Flutter SDK + VS C++ Build Tools gerekir.
-    if (-not $Autonomous) {
-        Write-Host ""
-        Write-Host "  FerIDE uygulamasını derlemek için Flutter SDK ve Visual Studio C++ Build Tools gerekiyor" -ForegroundColor Yellow
-        Write-Host "  (yaklaşık 6-8 GB indirme, bir kez yapılır)." -ForegroundColor Yellow
-        $ans = Read-Host "  Şimdi otomatik kurulsun mu? (E/h)"
-        if ($ans -match '^[hHnN]') { return $false }
+function Confirm-Step([string]$Question) {
+    if ($Autonomous) { return $true }
+    $ans = Read-Host "  $Question (E/h)"
+    return -not ($ans -match '^[hHnN]')
+}
+
+function Find-Flutter {
+    $cmd = Get-Command flutter -ErrorAction SilentlyContinue
+    if ($null -ne $cmd) { return $cmd.Source }
+    foreach ($c in @(
+        (Join-Path $env:LOCALAPPDATA "FerIDE\flutter\bin\flutter.bat"),
+        (Join-Path $env:USERPROFILE "flutter\bin\flutter.bat"),
+        "C:\src\flutter\bin\flutter.bat",
+        "C:\flutter\bin\flutter.bat")) {
+        if (Test-Path $c) { return $c }
     }
+    return $null
+}
+
+function Test-VisualCpp {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (!(Test-Path $vswhere)) { return $false }
+    $found = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+    return -not [string]::IsNullOrWhiteSpace("$found")
+}
+
+function Test-DeveloperMode {
+    try {
+        $v = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name AllowDevelopmentWithoutDevLicense -ErrorAction Stop
+        return $v.AllowDevelopmentWithoutDevLicense -eq 1
+    } catch { return $false }
+}
+
+function Install-BuildTools {
     if (-not $HasWinget) {
-        Write-Host "  [!] winget bulunamadı. Microsoft Store'dan 'Uygulama Yükleyici'yi kurup tekrar deneyin." -ForegroundColor Yellow
+        Write-Host "  [!] winget bulunamadı. Microsoft Store'dan 'Uygulama Yükleyici' (App Installer) kurup tekrar deneyin." -ForegroundColor Yellow
         return $false
     }
     if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
-        winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --silent
+        Write-Host "  -> Git kuruluyor..." -ForegroundColor Cyan
+        winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --silent | Out-Host
+        Update-SessionPath
     }
-    Write-Host "  -> Visual Studio 2022 C++ Build Tools kuruluyor (birkaç dakika sürebilir)..." -ForegroundColor Cyan
-    winget install -e --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements `
-        --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-
-    $FlutterDir = Join-Path $env:USERPROFILE "flutter"
-    if (!(Test-Path (Join-Path $FlutterDir "bin\flutter.bat"))) {
-        Write-Host "  -> Flutter SDK (stable) indiriliyor..." -ForegroundColor Cyan
-        $base = "https://storage.googleapis.com/flutter_infra_release/releases"
-        $rel = Invoke-RestMethod "$base/releases_windows.json"
-        $cur = $rel.releases | Where-Object { $_.hash -eq $rel.current_release.stable } | Select-Object -First 1
-        $zip = Join-Path $FerideHome "tmp\flutter_sdk.zip"
-        Invoke-WebRequest -Uri "$base/$($cur.archive)" -OutFile $zip -UseBasicParsing
-        Expand-Archive -LiteralPath $zip -DestinationPath $env:USERPROFILE -Force
-        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+    if (-not (Test-VisualCpp)) {
+        Write-Host "  -> Visual Studio 2022 C++ Build Tools kuruluyor (yaklaşık 3-5 GB, 10-20 dk; Windows yönetici onayı isteyebilir)..." -ForegroundColor Cyan
+        winget install -e --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements `
+            --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" | Out-Host
+        if (-not (Test-VisualCpp)) {
+            Write-Host "  [!] Visual Studio C++ araçları kurulamadı. Bilgisayarı yeniden başlatıp kurulumu tekrar çalıştırın." -ForegroundColor Red
+            return $false
+        }
+    }
+    if ($null -eq (Find-Flutter)) {
+        if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
+            Write-Host "  [!] Git bulunamadı; Flutter indirilemiyor." -ForegroundColor Red
+            return $false
+        }
+        $FlutterDir = Join-Path $env:LOCALAPPDATA "FerIDE\flutter"
+        Write-Host "  -> Flutter SDK (stable) indiriliyor: $FlutterDir" -ForegroundColor Cyan
+        New-Item -ItemType Directory -Path (Split-Path $FlutterDir) -Force | Out-Null
+        if (Test-Path $FlutterDir) { Remove-Item $FlutterDir -Recurse -Force -ErrorAction SilentlyContinue }
+        & git clone --depth 1 -b stable https://github.com/flutter/flutter.git $FlutterDir 2>&1 | ForEach-Object { Write-Host "$_" }
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
         if ($userPath -notlike "*$FlutterDir\bin*") {
             [Environment]::SetEnvironmentVariable("Path", "$userPath;$FlutterDir\bin", "User")
         }
     }
-    $env:Path = "$env:Path;" + (Join-Path $env:USERPROFILE "flutter\bin") + ";" + [Environment]::GetEnvironmentVariable("Path","Machine")
-    & flutter config --enable-windows-desktop | Out-Null
-    return $true
+    return $null -ne (Find-Flutter)
 }
 
-if (!(Test-Path $WinExe)) {
-    $hasFlutter = $null -ne (Get-Command flutter -ErrorAction SilentlyContinue)
-    if (-not $hasFlutter) { $hasFlutter = Install-FlutterToolchain }
-    if ($hasFlutter) {
-        Write-Host "  -> Windows Release paketi derleniyor (ilk derleme 5-10 dk sürebilir)..." -ForegroundColor Cyan
-        & flutter pub get
-        & flutter build windows --release
-        if (Test-Path $WinExe) {
-            Write-Host "  [OK] FerIDE Windows uygulaması derlendi." -ForegroundColor Green
+function Enable-DeveloperMode {
+    if (Test-DeveloperMode) { return $true }
+    Write-Host ""
+    Write-Host "  Flutter, Windows'ta eklentileri derlemek için 'Geliştirici Modu'nun açık olmasını ister" -ForegroundColor Yellow
+    Write-Host "  (Ayarlar > Sistem > Geliştiriciler için). Bu olmadan derleme 'symlink support' hatasıyla durur." -ForegroundColor Yellow
+    if (Confirm-Step "Geliştirici Modu şimdi açılsın mı? Windows yönetici onayı isteyecek") {
+        try {
+            Start-Process -FilePath "reg.exe" -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList `
+                'add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1'
+        } catch {}
+    }
+    if (Test-DeveloperMode) { Write-Host "  [OK] Geliştirici Modu açık." -ForegroundColor Green; return $true }
+    Write-Host "  [!] Geliştirici Modu açılamadı. Açılan Ayarlar sayfasında 'Geliştirici Modu'nu açıp kurulumu tekrar çalıştırın." -ForegroundColor Yellow
+    Start-Process "ms-settings:developers" -ErrorAction SilentlyContinue
+    return $false
+}
+
+function Build-FerideWindows {
+    $flutter = Find-Flutter
+    # Derleme kısa, boşluksuz bir kopyada yapılır: "Downloads\FerIDE Beta v5.3.8.1\FerIDE Beta v5.3.8"
+    # gibi uzun/boşluklu yollar CMake ve 260 karakter yol sınırına takılabiliyor.
+    $Src = Join-Path $env:LOCALAPPDATA "FerIDE\src"
+    New-Item -ItemType Directory -Path $Src -Force | Out-Null
+    Write-Host "  -> Kaynak kod derleme klasörüne kopyalanıyor: $Src" -ForegroundColor Cyan
+    # Yalnızca kökteki büyük/derlemeyle ilgisiz klasörler hariç (tam yolla: "models" adı lib\models'i de kapsardı).
+    $Skip = @("models", "bin", "Chats", "aegis_data", "todos_data", "skills_data", "relay8", "docs", "windows\flutter\ephemeral") |
+        ForEach-Object { Join-Path $AppDir $_ }
+    & robocopy $AppDir $Src /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD build .dart_tool .git @Skip | Out-Null
+    if ($LASTEXITCODE -ge 8) { Write-Host "  [!] Kaynak kopyalanamadı (robocopy $LASTEXITCODE)." -ForegroundColor Red; return $false }
+
+    Push-Location $Src
+    try {
+        & $flutter config --enable-windows-desktop 2>&1 | Out-Null
+        Write-Host "  -> flutter pub get" -ForegroundColor Cyan
+        & $flutter pub get 2>&1 | ForEach-Object { Write-Host "$_" }
+        if ($LASTEXITCODE -ne 0) { Write-Host "  [!] 'flutter pub get' başarısız." -ForegroundColor Red; return $false }
+        Write-Host "  -> flutter build windows --release (ilk derleme 5-15 dk sürebilir)" -ForegroundColor Cyan
+        & $flutter build windows --release 2>&1 | ForEach-Object { Write-Host "$_" }
+        $ok = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $Src "build\windows\x64\runner\Release\feride_v5_2.exe"))
+    } finally { Pop-Location }
+    if (-not $ok) {
+        Write-Host "  [!] Derleme başarısız. Ayrıntı için 'flutter doctor -v' çıktısı:" -ForegroundColor Red
+        & $flutter doctor -v 2>&1 | ForEach-Object { Write-Host "$_" }
+        return $false
+    }
+    New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
+    & robocopy (Join-Path $Src "build\windows\x64\runner\Release") $ReleaseDir /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+    return Test-Path $WinExe
+}
+
+if (Test-Path $WinExe) {
+    Write-Host "  [OK] FerIDE Windows uygulaması hazır." -ForegroundColor Green
+} else {
+    Write-Host "  FerIDE uygulaması bu bilgisayarda bir kez derlenecek. Eksikse Git, Flutter SDK ve" -ForegroundColor Yellow
+    Write-Host "  Visual Studio C++ Build Tools kurulur (toplam ~6-8 GB indirme, yalnızca ilk sefer)." -ForegroundColor Yellow
+    $ready = (Test-VisualCpp) -and ($null -ne (Find-Flutter))
+    if (-not $ready -and (Confirm-Step "Eksik derleme araçları şimdi kurulsun mu?")) { $ready = Install-BuildTools }
+    if ($ready -and (Enable-DeveloperMode)) {
+        if (Build-FerideWindows) {
+            Write-Host "  [OK] FerIDE Windows uygulaması derlendi: $WinExe" -ForegroundColor Green
         } else {
-            Write-Host "  [!] Derleme başarısız. 'flutter doctor' çıktısını kontrol edin." -ForegroundColor Red
+            Write-Host "  [!] Uygulama derlenemedi. Günlük: $LogFile" -ForegroundColor Red
         }
     }
-} else {
-    Write-Host "  [OK] FerIDE Windows uygulaması hazır." -ForegroundColor Green
 }
 
-try {
-    $DesktopPath = [Environment]::GetFolderPath("Desktop")
-    $ShortcutFile = Join-Path $DesktopPath "FerIDE Beta v5.3.8.lnk"
-    $WshShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut($ShortcutFile)
-    $Shortcut.TargetPath = Join-Path $AppDir "baslat_windows.bat"
-    $Shortcut.WorkingDirectory = $AppDir
-    $Shortcut.Description = "FerIDE Beta v5.3.8 - Otonom Yerel Yapay Zeka IDE"
-    $Shortcut.Save()
-    Write-Host "  [OK] Masaüstü kısayolu oluşturuldu: $ShortcutFile" -ForegroundColor Green
-} catch {}
+if (Test-Path $WinExe) {
+    try {
+        $DesktopPath = [Environment]::GetFolderPath("Desktop")
+        $ShortcutFile = Join-Path $DesktopPath "FerIDE.lnk"
+        $WshShell = New-Object -ComObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut($ShortcutFile)
+        $Shortcut.TargetPath = Join-Path $AppDir "baslat_windows.bat"
+        $Shortcut.WorkingDirectory = $AppDir
+        $Shortcut.IconLocation = "$WinExe,0"
+        $Shortcut.WindowStyle = 7
+        $Shortcut.Description = "FerIDE - Yerel Yapay Zeka Asistanı"
+        $Shortcut.Save()
+        Write-Host "  [OK] Masaüstü kısayolu: $ShortcutFile" -ForegroundColor Green
+    } catch {}
+}
 
 Write-Host ""
-Write-Host "================================================================" -ForegroundColor Green
-Write-Host "  FerIDE Beta v5.3.8 Windows Kurulumu Tamamlandı!               " -ForegroundColor Green
-Write-Host "  Başlatmak için 'baslat_windows.bat' dosyasına çift tıklayın.  " -ForegroundColor Green
-Write-Host "================================================================" -ForegroundColor Green
-
-if ($Launch) {
-    Start-Process -FilePath (Join-Path $AppDir "baslat_windows.bat")
+if (Test-Path $WinExe) {
+    Write-Host "================================================================" -ForegroundColor Green
+    Write-Host "  FerIDE Windows kurulumu tamamlandı.                            " -ForegroundColor Green
+    Write-Host "  Başlatmak için: Masaüstündeki 'FerIDE' kısayolu ya da          " -ForegroundColor Green
+    Write-Host "  bu klasördeki 'baslat_windows.bat'.                            " -ForegroundColor Green
+    Write-Host "================================================================" -ForegroundColor Green
+} else {
+    Write-Host "================================================================" -ForegroundColor Yellow
+    Write-Host "  Kurulum bitti ama FerIDE uygulaması henüz derlenmedi.          " -ForegroundColor Yellow
+    Write-Host "  Yukarıdaki [!] satırlarına bakın; düzeltip kurulumu tekrar     " -ForegroundColor Yellow
+    Write-Host "  çalıştırın. Günlük: $LogFile" -ForegroundColor Yellow
+    Write-Host "================================================================" -ForegroundColor Yellow
 }
+try { Stop-Transcript | Out-Null } catch {}
+
+if ($Launch -and (Test-Path $WinExe)) {
+    Start-Process -FilePath $WinExe -WorkingDirectory $AppDir
+}
+if (-not (Test-Path $WinExe)) { exit 1 }

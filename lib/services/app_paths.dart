@@ -41,7 +41,9 @@ class AppPaths {
   /// İşletim sistemine uygun kabuk (shell) komutu döndürür
   static (String executable, List<String> args) shellCommand(String command) {
     if (Platform.isWindows) {
-      return ('powershell', ['-NoProfile', '-NonInteractive', '-Command', command]);
+      // Bypass: Windows'un varsayılan "Restricted" politikası kurulum.ps1 gibi
+    // betikleri engeller (yalnızca bu süreç için geçerlidir).
+    return ('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command]);
     }
     return ('bash', ['-c', command]);
   }

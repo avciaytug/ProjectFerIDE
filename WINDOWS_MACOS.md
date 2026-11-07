@@ -4,21 +4,23 @@ Bu klasör üç işletim sistemi için aynı kaynak kodunu içerir. Klasördeki 
 
 ## Windows 10 / 11
 
-1. Zip'i kısa ve boşluksuz bir yola açın, örneğin `C:\FerIDE`.
-2. **`kurulum_windows.bat`** dosyasına çift tıklayın. Sırasıyla şunları yapar:
-   - Python 3.12, FFmpeg ve aria2'yi winget ile kurar.
-   - `%USERPROFILE%\.feride\venv` ortamını ve Python kütüphanelerini kurar. Whisper STT ve Piper erkek sesi dahildir.
-   - **Feride kadın sesini** kurar (`scripts\setup_voice.py`). Model dosyaları klasörde hazır olduğu için yalnızca PyTorch (CPU) indirilir.
-   - llama.cpp'nin Windows Vulkan sürümünü (`llama-server.exe`) kurar.
-   - Flutter yoksa onayınızı alıp **Git + Flutter SDK + Visual Studio 2022 C++ Build Tools** kurar (bir kez, yaklaşık 6-8 GB).
-   - `feride_v5_2.exe`'yi derler (ilk derleme 5-10 dk) ve masaüstüne kısayol koyar.
-3. **Dil modelleri:** büyük GGUF modelleriniz bu klasörde değildir. Linux'taki `~/.feride/models/*.gguf` dosyalarını (USB disk ile) Windows'ta `%USERPROFILE%\.feride\models\` klasörüne kopyalayın. Ya da uygulamada **Ayarlar > Model Merkezi**'nden indirin.
-4. **`baslat_windows.bat`** ile ya da masaüstü kısayoluyla başlatın.
+Tek adım: zip'i açın, klasördeki **`baslat_windows.bat`** dosyasına çift tıklayın.
+
+- Uygulama henüz derlenmemişse kurulum kendiliğinden başlar ve bitince FerIDE açılır. Sonraki açılışlarda doğrudan açılır.
+- Windows "Bilgisayarınız korundu" uyarısı gösterirse **Ek bilgi > Yine de çalıştır**'a tıklayın.
+- Kurulum yalnızca ilk sefer sırasıyla şunları yapar:
+  - Python 3.12, FFmpeg ve aria2'yi winget ile kurar. `%USERPROFILE%\.feride\venv` ortamını hazırlar: Whisper STT, Piper ve Feride kadın sesi.
+  - llama.cpp'nin Windows Vulkan sürümünü (`llama-server.exe`) indirir.
+  - Eksikse onayınızla **Git, Flutter SDK ve Visual Studio 2022 C++ Build Tools**'u kurar (~6-8 GB).
+  - Flutter'ın eklentiler için istediği **Geliştirici Modu**'nu açar. Bunun için bir kez Windows yönetici onayı istenir.
+  - `feride_v5_2.exe`'yi `%LOCALAPPDATA%\FerIDE\src` içinde derler (5-15 dk). Kısa, boşluksuz yol, uzun yol sorunlarını önler. Sonucu bu klasörün `build\windows\x64\runner\Release` altına kopyalar.
+  - Masaüstüne **FerIDE** kısayolu koyar.
+- **Dil modelleri:** büyük GGUF dosyaları zip'te yoktur. Linux'taki `~/.feride/models/*.gguf` dosyalarını `%USERPROFILE%\.feride\models\` içine kopyalayın ya da **Ayarlar > Model Merkezi**'nden indirin.
+- Sorun çıkarsa günlük şurada: `%USERPROFILE%\.feride\logs\kurulum_windows.log`.
 
 Notlar:
-- İlk açılışta Windows mikrofon izni isteyebilir: **Ayarlar > Gizlilik > Mikrofon > Masaüstü uygulamaları** açık olmalı.
-- Ses çalma Windows'un yerleşik SoundPlayer'ıyla yapılır; ek bir şey gerekmez.
-- Komutlar PowerShell'de çalışır. Ajana "terminal komutu" yerine işi tarif etmeniz yeterli.
+- Mikrofon için **Ayarlar > Gizlilik > Mikrofon > Masaüstü uygulamaları** açık olmalı.
+- Ses çalma Windows'un yerleşik SoundPlayer'ıyla yapılır; komutlar PowerShell'de çalışır.
 
 ## macOS (Apple Silicon / Intel)
 
@@ -51,4 +53,5 @@ Proje GitHub'a yüklenirse `.github/workflows/build.yml` üç platformun paketle
 | Linux (Kubuntu 26.10) native derleme, testler, ses hattı | ✅ Bu makinede test edildi |
 | Windows betik kodlaması (`kurulum.ps1` UTF-8 BOM + CRLF, `.bat` CRLF) | ✅ Düzeltildi. PowerShell 5.1, BOM'suz UTF-8 dosyalardaki "—" karakteri yüzünden betiği hiç çalıştıramıyordu |
 | Windows/macOS kod yolları (Python, PowerShell, ses çalma, ekran görüntüsü, yol çözümleme) | ✅ Kod incelemesiyle kontrol edildi |
+| Windows ikili adı | ✅ Düzeltildi: derleme `feride_v4.exe` üretiyor, betikler `feride_v5_2.exe` arıyordu (macOS'ta da aynı uyuşmazlık vardı) |
 | Windows/macOS'ta gerçek çalıştırma | ⚠️ Bu makinede yapılamadı; ilk testiniz bu olacak. Sorun çıkarsa `%USERPROFILE%\.feride\logs\` içeriğini paylaşın |

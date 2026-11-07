@@ -1,0 +1,11 @@
+FerIDE - Windows'ta nasil calistirilir
+
+1. Bu klasordeki baslat_windows.bat dosyasina cift tiklayin.
+   Ilk seferde kurulum kendiliginden baslar (20-40 dk, internet gerekir),
+   bitince FerIDE acilir ve Masaustune 'FerIDE' kisayolu konur.
+2. Sonraki acilislarda Masaustundeki 'FerIDE' kisayolunu kullanin.
+
+Windows 'Bilgisayariniz korundu' derse: Ek bilgi > Yine de calistir.
+Yonetici onayi istenirse (Visual Studio Build Tools, Gelistirici Modu) Evet deyin.
+Sorun olursa su gunlugu paylasin: %USERPROFILE%\.feride\logs\kurulum_windows.log
+Ayrintilar: WINDOWS_MACOS.md

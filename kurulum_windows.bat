@@ -1,11 +1,14 @@
 @echo off
 chcp 65001 >nul
-title FerIDE Beta v5.3.8 - Windows Otonom Kurulum Sihirbazı
+title FerIDE - Windows Kurulumu
 echo ================================================================
-echo   FerIDE Beta v5.3.8 - Windows 10/11 Otonom Kurulum Sihirbazı
+echo   FerIDE Beta v5.3.8 - Windows 10/11 Kurulumu
 echo ================================================================
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kurulum.ps1" %*
+if /i "%~1"=="--autonomous" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kurulum.ps1" -Autonomous
+    exit /b %ERRORLEVEL%
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kurulum.ps1" -Launch
 echo.
-if "%1"=="--autonomous" exit /b %ERRORLEVEL%
 pause

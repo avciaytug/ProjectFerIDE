@@ -97,8 +97,8 @@ fi
 
 # 6. macOS Uygulama Paketi Kontrolü
 echo "[5/5] FerIDE macOS uygulaması kontrol ediliyor..."
-MAC_APP="$APP_DIR/build/macos/Build/Products/Release/feride_v5_2.app"
-if [ ! -d "$MAC_APP" ] && command -v flutter >/dev/null 2>&1; then
+MAC_APP="$(ls -d "$APP_DIR"/build/macos/Build/Products/Release/*.app 2>/dev/null | head -n 1)"
+if [ -z "$MAC_APP" ] && command -v flutter >/dev/null 2>&1; then
   flutter pub get && flutter build macos --release
 fi
 

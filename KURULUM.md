@@ -26,7 +26,7 @@
    - `%USERPROFILE%\.feride\venv` ortamını ve ses/ofis/CAD kütüphanelerini hazırlar.
    - Resmi GitHub sürümünden Windows Vulkan **`llama-server.exe`** motorunu `%USERPROFILE%\.feride\bin\llama-cpp\` altına otonom indirir.
    - Masaüstüne **FerIDE Beta v5.3.8** kısayolunu oluşturur.
-3. Başlatmak için **`baslat_windows.bat`** dosyasına veya Masaüstü kısayoluna çift tıklayın. *(Not: Paket Linux üzerinde derlendiği için Windows'ta ilk çalıştırmada Flutter Windows SDK varsa `feride_v5_2.exe` otomatik derlenir.)*
+3. Başlatmak için **`baslat_windows.bat`** dosyasına veya Masaüstü kısayoluna çift tıklayın. *(Not: Windows uygulaması bu bilgisayarda bir kez derlenir; `baslat_windows.bat` gerekiyorsa kurulumu kendisi başlatır. Ayrıntılar: `WINDOWS_MACOS.md`.)*
 
 ---
 
