@@ -6,7 +6,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:feride_v5_2/features/live/wake_word.dart';
+import 'package:feride_v5_2/features/live/voice_intent.dart';
 import 'package:feride_v5_2/services/process_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -84,12 +84,4 @@ void main() {
     expect(VoiceIntent.classifyYesNo(text), YesNo.yes);
   }, skip: !enabled, timeout: const Timeout(Duration(minutes: 2)));
 
-  test('"Feride, saat kaç?" uyandırır ve komutu ayırır', () async {
-    final text = await _transcribeViaVad(_asUserMic(await _speak('Feride, saat kaç?')));
-    // ignore: avoid_print
-    print('duyulan: $text');
-    final cmd = VoiceIntent.matchWake(text);
-    expect(cmd, isNotNull);
-    expect(cmd!.toLowerCase(), contains('saat'));
-  }, skip: !enabled, timeout: const Timeout(Duration(minutes: 2)));
 }

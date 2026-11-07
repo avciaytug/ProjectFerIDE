@@ -36,9 +36,6 @@ class SettingsState {
   final PermissionMode permissionMode;
   final String workspaceDir;
 
-  /// "Feride" uyandırma kelimesiyle eller serbest kullanım (mikrofon arka planda dinler).
-  final bool wakeWordEnabled;
-
   /// FerIDE'nin sesi: 'female' (Feride, varsayılan) veya 'male'.
   final String ttsVoice;
 
@@ -72,7 +69,6 @@ class SettingsState {
     this.disabledMcpServers = const [],
     this.permissionMode = PermissionMode.autoEdit,
     this.workspaceDir = '',
-    this.wakeWordEnabled = false,
     this.ttsVoice = 'female',
     this.speechRate = 1.0,
   });
@@ -102,7 +98,6 @@ class SettingsState {
     List<String>? disabledMcpServers,
     PermissionMode? permissionMode,
     String? workspaceDir,
-    bool? wakeWordEnabled,
     String? ttsVoice,
     double? speechRate,
   }) {
@@ -126,7 +121,6 @@ class SettingsState {
       disabledMcpServers: disabledMcpServers ?? this.disabledMcpServers,
       permissionMode: permissionMode ?? this.permissionMode,
       workspaceDir: workspaceDir ?? this.workspaceDir,
-      wakeWordEnabled: wakeWordEnabled ?? this.wakeWordEnabled,
       ttsVoice: ttsVoice ?? this.ttsVoice,
       speechRate: speechRate ?? this.speechRate,
     );
@@ -179,7 +173,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
           disabledMcpServers: prefs.getStringList('disabledMcpServers') ?? [],
           permissionMode: permissionModeFromName(prefs.getString('permissionMode')),
           workspaceDir: prefs.getString('workspaceDir') ?? '',
-          wakeWordEnabled: prefs.getBool('wakeWordEnabled') ?? false,
           ttsVoice: prefs.getString('ttsVoice') ?? 'female',
           speechRate: prefs.getDouble('speechRate') ?? 1.0,
         )) {
@@ -209,10 +202,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     prefs.setDouble('speechRate', r);
   }
 
-  void setWakeWordEnabled(bool v) {
-    state = state.copyWith(wakeWordEnabled: v);
-    prefs.setBool('wakeWordEnabled', v);
-  }
 
   void setWorkspaceDir(String dir) {
     state = state.copyWith(workspaceDir: dir.trim());

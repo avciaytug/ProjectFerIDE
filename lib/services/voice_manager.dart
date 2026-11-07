@@ -40,7 +40,7 @@ class VoiceState {
   final double micLevel;
   final bool userSpeaking;
 
-  /// Mikrofonu şu an kim kullanıyor ('chat' | 'live' | 'wake') ve son deşifre kimin için.
+  /// Mikrofonu şu an kim kullanıyor ('chat' | 'live') ve son deşifre kimin için.
   final String? micOwner;
   final String? transcriptOwner;
 
@@ -172,8 +172,7 @@ class VoiceManager extends StateNotifier<VoiceState> {
 
   Future<void> startRecording({bool autoStop = false, bool isLiveSession = false, String? owner}) async {
     final newOwner = owner ?? (isLiveSession ? 'live' : 'chat');
-    // Mikrofon başka bir kullanıcıdaysa (ör. arka plandaki uyandırma dinleyicisi)
-    // önce onu serbest bırak; aynı kaydedicide iki akış açılmasın.
+    // Mikrofon başka bir kullanıcıdaysa önce onu serbest bırak; aynı kaydedicide iki akış açılmasın.
     if (state.isRecording) {
       await stopRecording(fromLiveSession: state.isLiveSession);
     }

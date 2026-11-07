@@ -12,20 +12,14 @@ import '../../services/sentence_chunker.dart';
 import '../../services/voice_manager.dart';
 import '../../theme/ide_palette.dart';
 import '../chat/state.dart';
-import 'wake_word.dart';
+import 'voice_intent.dart';
 
 /// Sesli asistanın anlık durumu.
 enum _Phase { idle, listening, hearing, transcribing, thinking, speaking }
 
 /// FerIDE sesli asistan ekranı: dinle → anla → düşün/yap → konuş → tekrar dinle.
 class LiveSessionView extends ConsumerStatefulWidget {
-  /// Açılır açılmaz oturumu başlat (uyandırma kelimesiyle açıldığında).
-  final bool autoStart;
-
-  /// Uyandırma cümlesinde "Feride"den sonra söylenen komut (varsa doğrudan işlenir).
-  final String? initialCommand;
-
-  const LiveSessionView({super.key, this.autoStart = false, this.initialCommand});
+  const LiveSessionView({super.key});
 
   @override
   ConsumerState<LiveSessionView> createState() => _LiveSessionViewState();
@@ -59,23 +53,11 @@ class _LiveSessionViewState extends ConsumerState<LiveSessionView> with SingleTi
     // Ses sunucularını önceden ısıt: ilk konuşmada bekleme olmasın.
     unawaited(ProcessManager.instance.startAll());
     _voiceSub = ref.listenManual<VoiceState>(voiceManagerProvider, _onVoiceChanged);
-    // Pencere açıkken arka plandaki uyandırma dinleyicisi mikrofonu bıraksın.
+    // Pencere açık olarak işaretlenir (ikinci kez açılmasın).
     _dialogOpen = ref.read(voiceDialogOpenProvider.notifier);
     Future.microtask(() {
       if (mounted) _dialogOpen.state = true;
     });
-    if (widget.autoStart) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final cmd = widget.initialCommand?.trim() ?? '';
-        _start(listenNow: cmd.isEmpty);
-        if (cmd.isNotEmpty) {
-          unawaited(_handleUtterance(cmd));
-        } else {
-          _say('Efendim, dinliyorum.');
-        }
-      });
-    }
   }
 
   @override
@@ -655,8 +637,8 @@ class _Entry {
 }
 
 
-/// Sesli asistan penceresini açar (başlıktaki düğme, Ctrl+M ve "Feride" uyandırma kelimesi).
-Future<void> openVoiceAssistant(BuildContext? context, {bool autoStart = false, String? initialCommand}) async {
+/// Sesli asistan penceresini açar (başlıktaki düğme ve Ctrl+M).
+Future<void> openVoiceAssistant(BuildContext? context) async {
   final ctx = context ?? rootNavigatorKey.currentContext;
   if (ctx == null) return;
   final container = ProviderScope.containerOf(ctx, listen: false);
@@ -668,7 +650,7 @@ Future<void> openVoiceAssistant(BuildContext? context, {bool autoStart = false, 
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.all(24),
-      child: LiveSessionView(autoStart: autoStart, initialCommand: initialCommand),
+      child: const LiveSessionView(),
     ),
   );
 }

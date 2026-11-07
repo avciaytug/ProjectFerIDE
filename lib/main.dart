@@ -15,7 +15,7 @@ import 'services/pty_sandbox.dart';
 import 'services/mcp_service.dart';
 import 'agent/permissions.dart';
 import 'features/chat/approval_listener.dart';
-import 'features/live/wake_word.dart';
+import 'features/live/voice_intent.dart';
 import 'package:window_manager/window_manager.dart';
 
 void main() async {
