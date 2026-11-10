@@ -5,7 +5,7 @@ import 'package:feride_v5_2/aegis/_native_aegis_db.dart'
     if (dart.library.js) 'package:feride_v5_2/aegis/_native_aegis_db_stub.dart';
 import '../services/app_paths.dart';
 
-/// Aytuğ'un FerIDE'sine özel "kendini geliştiren" hafıza katmanı.
+/// FerIDE'ye özel "kendini geliştiren" hafıza katmanı.
 /// Adlandırma tamamen bizim: Skills (beceriler) + Experiences (deneyimler).
 class AegisSkill {
   final String name;
@@ -267,7 +267,7 @@ class AegisService {
     final exps = searchExperiences(query, limit: expLimit);
     if (exps.isNotEmpty) {
       buf.writeln('## GEÇMİŞ DENEYİMLER (Memory)');
-      buf.writeln('(Yalnızca yöntem örneğidir. Kimliğin ve kendini tanıtman için yalnızca sistem talimatına uy; eski yanıtları kopyalama.)');
+      buf.writeln('(Yalnızca yöntem örneğidir. Eski yanıtları kopyalama; kimliğin doğrudan sorulmadıkça kendini tanıtma.)');
       for (final e in exps) {
         final ok = e['success'] == 1 ? 'Başarılı' : 'Hatalı';
         final tools = (e['tools_used'] as String?) ?? '';

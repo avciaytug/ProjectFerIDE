@@ -151,6 +151,17 @@ class HardwareProbe {
     return null;
   }
 
+  /// Windows PowerShell çıktısını ayrıştırır: "<toplam KB> <boş KB> [kullanılabilir bayt]".
+  /// Kullanılabilir bayt (önbellek dahil) varsa o, yoksa boş fiziksel bellek kullanılır.
+  static ({int total, int available}) parseWindowsRam(String out) {
+    final parts = out.trim().split(RegExp(r'\s+'));
+    final total = int.parse(parts[0]) * 1024;
+    final free = int.parse(parts[1]) * 1024;
+    final avail = parts.length > 2 ? int.tryParse(parts[2]) ?? 0 : 0;
+    final best = avail > free && avail <= total ? avail : free;
+    return (total: total, available: best);
+  }
+
   static Future<({int total, int available})> _ram() async {
     try {
       if (Platform.isLinux) {
@@ -167,14 +178,19 @@ class HardwareProbe {
         return (total: total, available: avail > 0 ? avail : total ~/ 2);
       }
       if (Platform.isWindows) {
+        // FreePhysicalMemory, Windows'un önbelleğe (standby) ayırdığı ama gerektiğinde
+        // hemen boşalttığı belleği saymaz; 32 GB makinede bile 2-6 GB gösterebilir ve
+        // planlayıcı bağlamı gereksiz küçültür. "Available Bytes" bu önbelleği de içerir
+        // (Görev Yöneticisi'ndeki "Kullanılabilir" değeri).
         final r = await Process.run('powershell', [
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          r'$o=Get-CimInstance Win32_OperatingSystem; "$($o.TotalVisibleMemorySize) $($o.FreePhysicalMemory)"'
-        ]);
-        final parts = r.stdout.toString().trim().split(RegExp(r'\s+'));
-        return (total: int.parse(parts[0]) * 1024, available: int.parse(parts[1]) * 1024);
+          r'$o=Get-CimInstance Win32_OperatingSystem; '
+              r'$a=$null; try { $a=(Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop).AvailableBytes } catch {}; '
+              r'"$($o.TotalVisibleMemorySize) $($o.FreePhysicalMemory) $a"'
+        ]).timeout(const Duration(seconds: 20));
+        return parseWindowsRam(r.stdout.toString());
       }
     } catch (_) {}
     return (total: 16 << 30, available: 8 << 30);

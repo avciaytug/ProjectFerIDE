@@ -82,6 +82,7 @@ class SubagentsNotifier extends Notifier<List<RunningSubagent>> {
       model: ref.read(selectedModelProvider),
       workspaceDir: settings.effectiveWorkspaceDir,
       permissionMode: settings.permissionMode,
+      permissionModeOf: () => ref.read(settingsProvider).permissionMode,
       maxSteps: maxSteps,
     );
     _engines[id] = engine;

@@ -185,6 +185,8 @@ Available devices:
       expect(p.ctx, greaterThanOrEqualTo(ModelLaunchPlanner.minAgentCtx));
       expect(p.placement, 'mixed');
       expect(p.warnings.join(), isNot(contains('yalnızca')));
+      // llama-server'ın kendi sığdırma ayarı da bağlamı 16K altına indiremez.
+      expect(p.args.join(' '), contains('--fit-ctx 16384'));
     });
 
     test('Yalnızca CPU da en az 16K bağlamla başlar', () {
@@ -198,6 +200,20 @@ Available devices:
       expect(p.canStart, isTrue);
       expect(p.ctx, lessThan(ModelLaunchPlanner.minAgentCtx));
       expect(p.warnings.join(), contains('Bağlam yalnızca'));
+    });
+  });
+
+  group('Windows bellek ölçümü', () {
+    test('önbellek dahil "kullanılabilir" bellek kullanılır (FreePhysicalMemory değil)', () {
+      // 32 GB Windows: boş 3 GB görünür ama önbellekle birlikte 24 GB kullanılabilir.
+      final r = HardwareProbe.parseWindowsRam('33406844 3145728 ${24 * gib}');
+      expect(r.total, 33406844 * 1024);
+      expect(r.available, 24 * gib);
+    });
+
+    test('kullanılabilir değer okunamazsa boş bellek kullanılır', () {
+      expect(HardwareProbe.parseWindowsRam('33406844 3145728 ').available, 3145728 * 1024);
+      expect(HardwareProbe.parseWindowsRam('33406844 3145728').available, 3145728 * 1024);
     });
   });
 }

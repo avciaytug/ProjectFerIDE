@@ -271,7 +271,13 @@ class ModelLaunchPlanner {
     ];
     // --fit yoksa (eski llama.cpp) GPU'ya sığacak katman sayısı burada hesaplanır.
     List<String> fitArgs(int ctx) {
-      if (canFit) return ['--fit', 'on', '--fit-target', '${reserve >> 20}'];
+      if (canFit) {
+        return [
+          '--fit', 'on', '--fit-target', '${reserve >> 20}',
+          // Sunucunun kendi sığdırma ayarı bağlamı ajan tabanının altına indirmesin.
+          if (has('--fit-ctx')) ...['--fit-ctx', '${math.min(ctx, minAgentCtx)}'],
+        ];
+      }
       final layers = math.max(1, info?.blockCount ?? 48);
       final perLayer = weights / layers;
       final n = ((gpuBudget - kv(ctx) - overhead) / perLayer).floor().clamp(0, layers);

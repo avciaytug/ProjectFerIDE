@@ -31,6 +31,16 @@ function Update-SessionPath {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
+# Paketler her zaman "winget" kaynağından kurulur. --source verilmezse winget msstore
+# kaynağını da arar; yeni kurulan Windows'ta msstore sertifika hatası (0x8a15005e)
+# verdiğinde "Please specify one of them using the --source option" deyip hiçbir şey kurmaz.
+function Install-WingetPackage([string]$Id, [string[]]$Extra = @()) {
+    $wgArgs = @("install", "-e", "--id", $Id, "--source", "winget",
+        "--accept-package-agreements", "--accept-source-agreements") + $Extra
+    & winget @wgArgs | Out-Host
+    Update-SessionPath
+}
+
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host "  FerIDE Beta v5.3.8 — Windows Otonom Kurulum Sihirbazı         " -ForegroundColor Cyan
 Write-Host "  Konum: $AppDir" -ForegroundColor Cyan
@@ -80,15 +90,15 @@ function Test-RealPython {
 
 if (!(Test-RealPython) -and $HasWinget) {
     Write-Host "  -> Python 3.12 WinGet üzerinden kuruluyor..." -ForegroundColor Yellow
-    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent
+    Install-WingetPackage "Python.Python.3.12" @("--silent", "--scope", "user")
 }
 if (($null -eq (Get-Command ffmpeg -ErrorAction SilentlyContinue)) -and $HasWinget) {
     Write-Host "  -> FFmpeg WinGet üzerinden kuruluyor..." -ForegroundColor Yellow
-    winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements --silent
+    Install-WingetPackage "Gyan.FFmpeg" @("--silent")
 }
 if (($null -eq (Get-Command aria2c -ErrorAction SilentlyContinue)) -and $HasWinget) {
     Write-Host "  -> Aria2 (16x İndirici) WinGet üzerinden kuruluyor..." -ForegroundColor Yellow
-    winget install -e --id aria2.aria2 --accept-package-agreements --accept-source-agreements --silent
+    Install-WingetPackage "aria2.aria2" @("--silent")
 }
 
 Update-SessionPath
@@ -221,13 +231,12 @@ function Install-BuildTools {
     }
     if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
         Write-Host "  -> Git kuruluyor..." -ForegroundColor Cyan
-        winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --silent | Out-Host
-        Update-SessionPath
+        Install-WingetPackage "Git.Git" @("--silent")
     }
     if (-not (Test-VisualCpp)) {
         Write-Host "  -> Visual Studio 2022 C++ Build Tools kuruluyor (yaklaşık 3-5 GB, 10-20 dk; Windows yönetici onayı isteyebilir)..." -ForegroundColor Cyan
-        winget install -e --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements `
-            --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" | Out-Host
+        Install-WingetPackage "Microsoft.VisualStudio.2022.BuildTools" @("--override",
+            "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended")
         if (-not (Test-VisualCpp)) {
             Write-Host "  [!] Visual Studio C++ araçları kurulamadı. Bilgisayarı yeniden başlatıp kurulumu tekrar çalıştırın." -ForegroundColor Red
             return $false
@@ -268,32 +277,80 @@ function Enable-DeveloperMode {
     return $false
 }
 
+# Klasörü sembolik bağların hedefine dokunmadan siler (PowerShell 5.1'in Remove-Item
+# -Recurse komutu bağları izleyip hedefteki dosyaları da silebiliyor; "rd /s" izlemez).
+function Remove-TreeSafe([string]$Path) {
+    if (Test-Path -LiteralPath $Path) { & cmd.exe /c "rd /s /q `"$Path`"" 2>&1 | Out-Null }
+}
+
+# Önceki kurulumların bozduğu paket önbelleğini onarır: içi boşaltılmış paket klasörleri
+# (pubspec.yaml'ı olmayan) silinir, böylece "flutter pub get" onları yeniden indirir.
+function Repair-PubCache {
+    $cache = if ($env:PUB_CACHE) { $env:PUB_CACHE } else { Join-Path $env:LOCALAPPDATA "Pub\Cache" }
+    $hosted = Join-Path $cache "hosted\pub.dev"
+    if (!(Test-Path $hosted)) { return }
+    $broken = @(Get-ChildItem -LiteralPath $hosted -Directory -ErrorAction SilentlyContinue |
+        Where-Object { !(Test-Path -LiteralPath (Join-Path $_.FullName "pubspec.yaml")) })
+    if ($broken.Count -gt 0) {
+        Write-Host "  -> Bozuk $($broken.Count) paket önbellekten temizleniyor (yeniden indirilecek)" -ForegroundColor Cyan
+        foreach ($b in $broken) { Remove-TreeSafe $b.FullName }
+    }
+}
+
 function Build-FerideWindows {
     $flutter = Find-Flutter
     # Derleme kısa, boşluksuz bir kopyada yapılır: "Downloads\FerIDE Beta v5.3.8.1\FerIDE Beta v5.3.8"
     # gibi uzun/boşluklu yollar CMake ve 260 karakter yol sınırına takılabiliyor.
     $Src = Join-Path $env:LOCALAPPDATA "FerIDE\src"
     New-Item -ItemType Directory -Path $Src -Force | Out-Null
+    # Eski betiğin bıraktığı bağ klasörü robocopy'den ÖNCE güvenle kaldırılır.
+    Remove-TreeSafe (Join-Path $Src "windows\flutter\ephemeral")
+    Repair-PubCache
     Write-Host "  -> Kaynak kod derleme klasörüne kopyalanıyor: $Src" -ForegroundColor Cyan
     # Yalnızca kökteki büyük/derlemeyle ilgisiz klasörler hariç (tam yolla: "models" adı lib\models'i de kapsardı).
-    $Skip = @("models", "bin", "Chats", "aegis_data", "todos_data", "skills_data", "relay8", "docs", "windows\flutter\ephemeral") |
+    $Skip = @("models", "bin", "Chats", "aegis_data", "todos_data", "skills_data", "relay8", "docs") |
         ForEach-Object { Join-Path $AppDir $_ }
-    & robocopy $AppDir $Src /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD build .dart_tool .git @Skip | Out-Null
+    # ÖNEMLİ: "ephemeral" klasörleri Flutter'ın paket önbelleğine (Pub\Cache) giden sembolik
+    # bağlar içerir. robocopy /MIR bunları silerken bağın İÇİNE girip önbellekteki gerçek
+    # paket dosyalarını siliyordu (window_manager, jni... "Error when reading" hataları).
+    # /XJ bağları hiç izlemez; ephemeral ve .plugin_symlinks adları her iki tarafta da hariç.
+    & robocopy $AppDir $Src /MIR /XJ /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD build .dart_tool .git ephemeral .plugin_symlinks @Skip /XF .flutter-plugins .flutter-plugins-dependencies | Out-Null
     if ($LASTEXITCODE -ge 8) { Write-Host "  [!] Kaynak kopyalanamadı (robocopy $LASTEXITCODE)." -ForegroundColor Red; return $false }
 
+    $BuildOut = Join-Path $FerideHome "logs\flutter_build_windows.log"
+    $ok = $false
     Push-Location $Src
     try {
         & $flutter config --enable-windows-desktop 2>&1 | Out-Null
-        Write-Host "  -> flutter pub get" -ForegroundColor Cyan
-        & $flutter pub get 2>&1 | ForEach-Object { Write-Host "$_" }
-        if ($LASTEXITCODE -ne 0) { Write-Host "  [!] 'flutter pub get' başarısız." -ForegroundColor Red; return $false }
-        Write-Host "  -> flutter build windows --release (ilk derleme 5-15 dk sürebilir)" -ForegroundColor Cyan
-        & $flutter build windows --release 2>&1 | ForEach-Object { Write-Host "$_" }
-        $ok = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $Src "build\windows\x64\runner\Release\feride_v5_2.exe"))
+        # 1. deneme: önceki derlemenin önbelleğiyle (hızlı). Başarısız olursa eski
+        # sürümlerden kalan önbellek (build, .dart_tool, ephemeral) silinip temiz derlenir.
+        foreach ($attempt in 1, 2) {
+            if ($attempt -eq 2) {
+                Write-Host "  [!] Derleme başarısız; eski derleme önbelleği temizlenip bir kez daha deneniyor..." -ForegroundColor Yellow
+                foreach ($d in @("windows\flutter\ephemeral", "build", ".dart_tool")) { Remove-TreeSafe (Join-Path $Src $d) }
+                Repair-PubCache
+                Write-Host "  -> Paket önbelleği doğrulanıyor (flutter pub cache repair, birkaç dakika sürebilir)" -ForegroundColor Cyan
+                & $flutter pub cache repair 2>&1 | Out-Null
+            }
+            Write-Host "  -> flutter pub get" -ForegroundColor Cyan
+            & $flutter pub get 2>&1 | ForEach-Object { Write-Host "$_" }
+            if ($LASTEXITCODE -ne 0) { Write-Host "  [!] 'flutter pub get' başarısız." -ForegroundColor Red; continue }
+            Write-Host "  -> flutter build windows --release (ilk derleme 5-15 dk sürebilir)" -ForegroundColor Cyan
+            & $flutter build windows --release 2>&1 | Tee-Object -FilePath $BuildOut | ForEach-Object { Write-Host "$_" }
+            $ok = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $Src "build\windows\x64\runner\Release\feride_v5_2.exe"))
+            if ($ok) { break }
+        }
     } finally { Pop-Location }
     if (-not $ok) {
-        Write-Host "  [!] Derleme başarısız. Ayrıntı için 'flutter doctor -v' çıktısı:" -ForegroundColor Red
-        & $flutter doctor -v 2>&1 | ForEach-Object { Write-Host "$_" }
+        Write-Host ""
+        Write-Host "  [!] Derleme başarısız. Asıl hata satırları:" -ForegroundColor Red
+        if (Test-Path $BuildOut) {
+            $errs = Select-String -Path $BuildOut -Pattern "error|Error:|hata|Exception|failed|FAILED|Target .* failed" -SimpleMatch:$false |
+                Where-Object { $_.Line -notmatch "^\s*$" } | Select-Object -First 40
+            foreach ($e in $errs) { Write-Host "    $($e.Line)" -ForegroundColor Red }
+            Write-Host ""
+            Write-Host "  Derleme çıktısının tamamı: $BuildOut" -ForegroundColor Yellow
+        }
         return $false
     }
     New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null

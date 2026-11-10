@@ -21,6 +21,8 @@ class SubagentEngine {
   final int maxSteps;
   final String workspaceDir;
   final PermissionMode permissionMode;
+  /// Verilirse izin modu her araç çağrısında güncel ayardan okunur.
+  final PermissionMode Function()? permissionModeOf;
   final List<AgentTool> extraTools;
   final CancelToken cancelToken = CancelToken();
 
@@ -29,6 +31,7 @@ class SubagentEngine {
     required this.model,
     required this.workspaceDir,
     this.permissionMode = PermissionMode.autoEdit,
+    this.permissionModeOf,
     this.maxSteps = 25,
     this.extraTools = const [],
   });
@@ -56,7 +59,8 @@ class SubagentEngine {
       tools: ToolExecutor([...defaultTools(), ...extraTools]),
       ctx: ToolContext(
         workspaceDir: workspaceDir,
-        policy: PermissionPolicy(mode: permissionMode, workspaceDir: workspaceDir),
+        policy: PermissionPolicy(
+            mode: permissionMode, workspaceDir: workspaceDir, modeOf: permissionModeOf),
       ),
       cancelToken: cancelToken,
       maxSteps: maxSteps,

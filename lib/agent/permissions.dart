@@ -45,7 +45,7 @@ PermissionMode permissionModeFromName(String? name) => PermissionMode.values
 String permissionModeLabel(PermissionMode m) => switch (m) {
       PermissionMode.ask => 'Her işlemde sor',
       PermissionMode.autoEdit => 'Dosya düzenlemeye izin ver, komutları sor',
-      PermissionMode.fullAuto => 'Tam otonom (tehlikeli komutlar yine engellenir)',
+      PermissionMode.fullAuto => 'Tam otonom (hiçbir şey sorulmaz; yalnızca sistemi yok eden komutlar engellenir)',
     };
 
 enum PermissionDecision { allow, ask, deny }
@@ -112,6 +112,14 @@ class ApprovalBroker {
     }
   }
 
+  /// Bekleyen tüm istekleri onaylar (kullanıcı "Tam otonom"a geçtiğinde).
+  void approveAll() {
+    for (final r in List.of(_pending)) {
+      r.resolve(true);
+    }
+    _pending.clear();
+  }
+
   /// Bekleyen tüm istekleri reddeder (ajan durdurulduğunda).
   void rejectAll() {
     for (final r in List.of(_pending)) {
@@ -122,10 +130,22 @@ class ApprovalBroker {
 }
 
 class PermissionPolicy {
-  final PermissionMode mode;
+  final PermissionMode _mode;
   final String workspaceDir;
 
-  const PermissionPolicy({required this.mode, required this.workspaceDir});
+  /// Verilirse izin modu her araç çağrısında buradan GÜNCEL olarak okunur.
+  /// Böylece görev sürerken üst çubuktan "Tam otonom"a geçmek o görevi de
+  /// hemen etkiler (eskiden görev başındaki mod sonuna kadar kullanılıyordu).
+  final PermissionMode Function()? _modeOf;
+
+  const PermissionPolicy({
+    required PermissionMode mode,
+    required this.workspaceDir,
+    PermissionMode Function()? modeOf,
+  })  : _mode = mode,
+        _modeOf = modeOf;
+
+  PermissionMode get mode => _modeOf?.call() ?? _mode;
 
   /// Hiçbir modda çalıştırılmayacak komut desenleri.
   static final List<RegExp> _catastrophic = [
@@ -141,7 +161,8 @@ class PermissionPolicy {
     RegExp(r'\bdiskpart\b', caseSensitive: false),
   ];
 
-  /// Tam otonom modda bile kullanıcıya sorulacak riskli komutlar.
+  /// Tam otonom dışındaki modlarda kullanıcıya sorulacak riskli komutlar.
+  /// Tam otonom modda hiçbir şey sorulmaz (yalnızca katastrofik komutlar engellenir).
   static final List<RegExp> _sensitive = [
     RegExp(r'\bsudo\b|\bpkexec\b|\bdoas\b|\brunas\b'),
     RegExp(r'\b(shutdown|reboot|poweroff|halt)\b'),
@@ -211,11 +232,11 @@ class PermissionPolicy {
             : PermissionVerdict.allow;
 
       case ToolRisk.write:
+        if (mode == PermissionMode.fullAuto) return PermissionVerdict.allow;
         if (paths.any(isSensitivePath)) {
           return const PermissionVerdict(
               PermissionDecision.ask, 'Hassas bir sistem/yapılandırma dosyasına yazma');
         }
-        if (mode == PermissionMode.fullAuto) return PermissionVerdict.allow;
         if (mode == PermissionMode.autoEdit &&
             paths.isNotEmpty &&
             paths.every(isInsideWorkspace)) {
@@ -225,11 +246,11 @@ class PermissionPolicy {
             paths.every(isInsideWorkspace) ? 'Dosya değişikliği' : 'Çalışma alanı dışına yazma');
 
       case ToolRisk.execute:
+        if (mode == PermissionMode.fullAuto) return PermissionVerdict.allow;
         if (command != null && isSensitiveCommand(command)) {
           return const PermissionVerdict(
               PermissionDecision.ask, 'Yönetici yetkisi, silme veya sistem değişikliği içeren komut');
         }
-        if (mode == PermissionMode.fullAuto) return PermissionVerdict.allow;
         return const PermissionVerdict(PermissionDecision.ask, 'Komut çalıştırma');
     }
   }

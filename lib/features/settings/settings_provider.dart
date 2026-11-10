@@ -220,6 +220,8 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   void setPermissionMode(PermissionMode mode) {
     state = state.copyWith(permissionMode: mode);
     prefs.setString('permissionMode', mode.name);
+    // Ekranda bekleyen onay penceresi varsa "Tam otonom"a geçiş onu da onaylar.
+    if (mode == PermissionMode.fullAuto) ApprovalBroker.instance.approveAll();
   }
 
   void setTtsVoice(String v) {

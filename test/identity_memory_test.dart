@@ -26,6 +26,7 @@ void main() {
     expect(prompt, contains("Sen FerIDE'sin"));
     expect(prompt.toLowerCase(), isNot(contains('claude code standart')));
     expect(prompt, contains('başka bir ürünün'));
+    expect(prompt, contains('ASLA kendini tanıtma'));
   });
 
   test('Silinen deneyim hafıza aramasında ve dizinde kalmaz; eski tetikleyiciler onarılır', () {

@@ -51,11 +51,28 @@ void main() {
       }
     });
 
-    test('tam otonomda riskli komutlar yine sorulur, sıradan komutlar çalışır', () {
+    test('tam otonomda hiçbir şey sorulmaz, diğer modlarda riskli komutlar sorulur', () {
       final pol = PermissionPolicy(mode: PermissionMode.fullAuto, workspaceDir: ws.path);
       expect(pol.evaluate(toolName: 'run_command', risk: ToolRisk.execute, command: 'sudo apt install x').decision,
+          PermissionDecision.allow);
+      expect(pol.evaluate(toolName: 'run_command', risk: ToolRisk.execute, command: 'ls -la /usr/bin/pkexec').decision,
+          PermissionDecision.allow);
+      expect(pol.evaluate(toolName: 'write_to_file', risk: ToolRisk.write, paths: ['/etc/x.conf']).decision,
+          PermissionDecision.allow);
+      final ask = PermissionPolicy(mode: PermissionMode.autoEdit, workspaceDir: ws.path);
+      expect(ask.evaluate(toolName: 'run_command', risk: ToolRisk.execute, command: 'sudo apt install x').decision,
           PermissionDecision.ask);
       expect(pol.evaluate(toolName: 'run_command', risk: ToolRisk.execute, command: 'ls -la').decision,
+          PermissionDecision.allow);
+    });
+
+    test('görev sürerken Tam otonom\'a geçmek hemen etkili olur', () {
+      var current = PermissionMode.autoEdit;
+      final pol = PermissionPolicy(mode: current, workspaceDir: ws.path, modeOf: () => current);
+      expect(pol.evaluate(toolName: 'run_command', risk: ToolRisk.execute, command: 'Get-Service').decision,
+          PermissionDecision.ask);
+      current = PermissionMode.fullAuto;
+      expect(pol.evaluate(toolName: 'run_command', risk: ToolRisk.execute, command: 'Get-Service').decision,
           PermissionDecision.allow);
     });
 

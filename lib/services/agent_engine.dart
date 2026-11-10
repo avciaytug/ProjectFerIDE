@@ -164,20 +164,21 @@ class AgentEngine {
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}.';
 
     if (isLiveSession) {
-      return 'Senin adın Feride; Aytuğ AVCI tarafından geliştirilen, bilgisayarda işleri yapabilen sesli bir yapay zeka asistanısın. '
-          'Doğal, samimi ve kibar bir Türkçe konuş. Yanıtların SESLİ okunacak: kısa tut (1-3 cümle), markdown, tablo, kod bloğu ve emoji kullanma. '
+      return 'Senin adın Feride; bilgisayarda işleri yapabilen sesli bir yapay zeka asistanısın. '
+          'Doğal, samimi ve kibar bir Türkçe konuş. Sorulmadıkça asla kendini tanıtma veya kimlik girizgâhı yapma, doğrudan istenene yanıt ver. '
+          'Yanıtların SESLİ okunacak: kısa tut (1-3 cümle), markdown, tablo, kod bloğu ve emoji kullanma. '
           'Kullanıcı bir iş isterse araçlarla gerçekten yap ve sonucu tek cümleyle söyle. '
           'Uzun sürecek işleri dispatch_worker ile arka plana ver ve "Arka planda başlattım" de.\n$env$extraContext';
     }
 
     final b = StringBuffer()
-      ..writeln('Sen FerIDE\'sin: Aytuğ AVCI tarafından geliştirilen, tamamen yerel çalışan, kullanıcının bilgisayarında '
+      ..writeln('Sen FerIDE\'sin: tamamen yerel çalışan, kullanıcının bilgisayarında '
           'gerçek işler yapabilen otonom bir masaüstü asistanı ve yazılım mühendisisin.')
-      ..writeln('Kendini tanıtırken yalnızca bu tanımı kullan; kendini başka bir ürünün '
-          '(ör. Claude Code, ChatGPT, Copilot) standardında, kopyası ya da sürümü olarak tanıtma.')
       ..writeln(env)
       ..writeln()
       ..writeln('ÇALIŞMA İLKELERİ:')
+      ..writeln('- Kullanıcı açıkça ve doğrudan kim olduğunu sormadıkça veya kendini tanıtmanı istemedikçe (ör. "sen kimsin?", "kendini tanıt" demedikçe) ASLA kendini tanıtma; "Ben ...", "Ben FerIDE..." gibi hiçbir girizgâh yapma. Her sohbete ve mesaja doğrudan kullanıcının konusuyla, sorusuyla veya göreviyle başla.')
+      ..writeln('- Kimliğin doğrudan sorulduğunda kendini başka bir ürünün (ör. Claude Code, ChatGPT, Copilot) standardında, kopyası ya da sürümü olarak tanıtma.')
       ..writeln('- Bir işi yapabiliyorsan araçlarla gerçekten yap; sadece nasıl yapılacağını anlatma.')
       ..writeln('- Dosya okumak için read_file/read_document, aramak için grep_search/glob/list_directory kullan; bunlar için terminal komutu yazma.')
       ..writeln('- Mevcut dosyayı değiştirirken önce oku, sonra replace_file_content ile hedefli değişiklik yap. Yeni dosya için write_to_file.')
@@ -281,7 +282,11 @@ class AgentEngine {
 
       final ctx = ToolContext(
         workspaceDir: workspace,
-        policy: PermissionPolicy(mode: settings.permissionMode, workspaceDir: workspace),
+        policy: PermissionPolicy(
+          mode: settings.permissionMode,
+          workspaceDir: workspace,
+          modeOf: () => _ref.read(settingsProvider).permissionMode,
+        ),
         sessionId: sessionId,
         onTodos: (todos) => _emit(TodoUpdated(todos)),
         spawnSubagent: (goal, steps) =>
