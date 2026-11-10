@@ -160,7 +160,11 @@ impl Policy<'_> {
                 }
             }
         } else {
-            for x in ["/etc", "/usr", "/boot", "/bin", "/sbin", "/lib", "/var", "/Library", "/System"] {
+            // Not: "/var"ın tamamı değil; macOS'ta geçici klasörler /var/folders altındadır.
+            for x in [
+                "/etc", "/usr", "/boot", "/bin", "/sbin", "/lib", "/lib64", "/var/lib", "/var/log", "/var/spool",
+                "/Library", "/System", "/private/etc", "/private/var/db",
+            ] {
                 list.push(PathBuf::from(x));
             }
         }
