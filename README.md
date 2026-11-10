@@ -16,7 +16,9 @@ Windows, Linux ve macOS'ta aynı davranış.
 - **Model Merkezi:** bellek-farkında başlatma planı (GPU / GPU+RAM / MoE uzmanları RAM'de / CPU), Hugging Face'ten
   devam ettirilebilir ve doğrulanmış indirme, görsel adaptörü (mmproj) eşleştirme.
 - **IDE:** gezgin, git durumu, CodeMirror düzenleyici, gerçek terminal, model günlüğü.
-- **Ses (isteğe bağlı):** Whisper ile sesle yazma, Türkçe sesli yanıt (Feride — Ahenk Cep, Fahrettin — Piper).
+- **Sohbet:** mesaj kutusunun altında düşünme aç/kapat ve model seçici; her yanıtta girdi/çıktı tokenları ve token/sn.
+- **Canlı sesli sohbet (isteğe bağlı):** Gemini Live benzeri, araya girilebilen, tamamen yerel sesli konuşma
+  (`Ctrl+Shift+V`). Whisper ile sesle yazma, Türkçe sesli yanıt (Feride — Ahenk Cep, Fahrettin — Piper).
 
 ## Kurulum
 

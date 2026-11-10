@@ -429,7 +429,7 @@ mod tests {
             b.extend(0u32.to_le_bytes());
             b.extend(off.to_le_bytes());
         }
-        while b.len() % 32 != 0 {
+        while !b.len().is_multiple_of(32) {
             b.push(0);
         }
         b.extend(vec![1u8; 128]);

@@ -60,7 +60,15 @@ pub struct Turn {
     pub tool_calls: Vec<ToolCall>,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
+    /// Üretim hızı (çıktı token/sn). llama-server'da sunucunun ölçtüğü değer,
+    /// diğer uç noktalarda ilk token ile akış sonu arasındaki süreden hesaplanır.
     pub tokens_per_second: Option<f64>,
+    /// İstem işleme hızı (girdi token/sn); yalnızca llama-server bildirir.
+    pub prompt_per_second: Option<f64>,
+    /// Önbellekten (KV cache) gelen, yeniden işlenmeyen girdi tokenları.
+    pub cached_tokens: Option<u64>,
+    /// Çıktı üretiminin süresi (sn).
+    pub gen_seconds: f64,
     pub finish_reason: Option<String>,
 }
 
@@ -200,6 +208,8 @@ impl LlmClient {
         let mut last_flush = Instant::now();
         let mut pending_c = String::new();
         let mut pending_r = String::new();
+        let mut first_token: Option<Instant> = None;
+        let mut predicted_ms: Option<f64> = None;
 
         'outer: loop {
             let chunk = tokio::select! {
@@ -226,15 +236,36 @@ impl LlmClient {
                 if let Some(u) = j.get("usage").filter(|u| u.is_object()) {
                     turn.prompt_tokens = u["prompt_tokens"].as_u64().or(turn.prompt_tokens);
                     turn.completion_tokens = u["completion_tokens"].as_u64().or(turn.completion_tokens);
+                    turn.cached_tokens = u["prompt_tokens_details"]["cached_tokens"].as_u64().or(turn.cached_tokens);
                 }
-                if let Some(t) = j["timings"]["predicted_per_second"].as_f64() {
-                    turn.tokens_per_second = Some(t);
+                if let Some(t) = j.get("timings").filter(|t| t.is_object()) {
+                    turn.tokens_per_second = t["predicted_per_second"].as_f64().or(turn.tokens_per_second);
+                    turn.prompt_per_second = t["prompt_per_second"].as_f64().or(turn.prompt_per_second);
+                    predicted_ms = t["predicted_ms"].as_f64().or(predicted_ms);
+                    if let Some(c) = t["cache_n"].as_u64() {
+                        turn.cached_tokens = Some(c);
+                    }
+                    if turn.completion_tokens.is_none() {
+                        turn.completion_tokens = t["predicted_n"].as_u64();
+                    }
+                    if turn.prompt_tokens.is_none() {
+                        if let Some(n) = t["prompt_n"].as_u64() {
+                            turn.prompt_tokens = Some(n + t["cache_n"].as_u64().unwrap_or(0));
+                        }
+                    }
                 }
                 let Some(choice) = j["choices"].get(0) else { continue };
                 if let Some(fr) = choice["finish_reason"].as_str() {
                     turn.finish_reason = Some(fr.to_string());
                 }
                 let delta = &choice["delta"];
+                if first_token.is_none()
+                    && ["content", "reasoning_content", "reasoning", "tool_calls"]
+                        .iter()
+                        .any(|k| delta[k].as_str().is_some_and(|s| !s.is_empty()) || delta[k].is_array())
+                {
+                    first_token = Some(Instant::now());
+                }
                 let r = delta["reasoning_content"].as_str().or(delta["reasoning"].as_str());
                 if let Some(r) = r.filter(|r| !r.is_empty()) {
                     reasoning.push_str(r);
@@ -275,6 +306,16 @@ impl LlmClient {
             }
         }
         flush(&mut pending_c, &mut pending_r, on_delta);
+
+        let wall = first_token.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        turn.gen_seconds = predicted_ms.map(|ms| ms / 1000.0).unwrap_or(wall);
+        if turn.tokens_per_second.is_none() {
+            if let Some(n) = turn.completion_tokens.filter(|n| *n > 0) {
+                if turn.gen_seconds > 0.05 {
+                    turn.tokens_per_second = Some(n as f64 / turn.gen_seconds);
+                }
+            }
+        }
 
         let mut calls: Vec<ToolCall> = calls.into_iter().filter(|c| !c.name.is_empty()).collect();
         let mut text = content;

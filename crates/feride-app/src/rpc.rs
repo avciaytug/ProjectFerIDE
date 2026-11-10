@@ -277,7 +277,8 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
                 bail!("boş mesaj");
             }
             let images: Vec<String> = serde_json::from_value(p["images"].clone()).unwrap_or_default();
-            let sid = agent::start(core, p["session"].as_str().map(String::from), text, images)?;
+            let voice = p["voice"].as_bool().unwrap_or(false);
+            let sid = agent::start(core, p["session"].as_str().map(String::from), text, images, voice)?;
             json!({"session": sid})
         }
         "chat.stop" => json!(agent::stop(core, p_str(&p, "session")?)),
@@ -389,6 +390,10 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
 
         // ------------------------------------------------------------ ses
         "voice.status" => serde_json::to_value(core.voice.status())?,
+        "voice.warmup" => {
+            core.voice.warmup().await?;
+            serde_json::to_value(core.voice.status())?
+        }
         "voice.transcribe" => json!(core.voice.transcribe(p_str(&p, "audio")?, p["mime"].as_str().unwrap_or("audio/webm")).await?),
         "voice.speak" => {
             let s = core.settings();

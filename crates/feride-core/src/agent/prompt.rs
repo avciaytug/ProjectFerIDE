@@ -12,6 +12,8 @@ pub struct PromptInput<'a> {
     pub model_name: &'a str,
     pub subagent: bool,
     pub plan_mode: bool,
+    /// Canlı sesli sohbet: yanıt sesli okunacak.
+    pub voice: bool,
 }
 
 /// Çalışma alanındaki proje talimatları (FERIDE.md / AGENTS.md / CLAUDE.md).
@@ -80,6 +82,14 @@ pub fn build(inp: &PromptInput) -> String {
         p.push_str(
             "# PLAN MODU\nKullanıcı plan modunu seçti: hiçbir dosyayı değiştirme ve değişiklik yapan komut çalıştırma. \
              İncele, araştır ve sonunda uygulanabilir, adım adım bir plan sun.\n\n",
+        );
+    }
+    if inp.voice {
+        p.push_str(
+            "# SESLİ SOHBET
+Kullanıcı seninle canlı sesli konuşuyor; mesajı konuşmadan yazıya çevrildi (küçük yazım              hataları olabilir) ve yanıtın sesli okunacak. Doğal konuşma diliyle, kısa yanıt ver (genelde 1-3 cümle).              Markdown başlığı, tablo, emoji ve uzun liste kullanma. Kod ya da uzun içerik gerekiyorsa dosyaya yaz veya              kısa bir kod bloğu göster; sesli olarak yalnızca ne yaptığını söyle. Bir işlem yapacaksan önce kısaca ne              yapacağını söyle. Sayıları ve kısaltmaları okunabilir yaz.
+
+",
         );
     }
     if !inp.subagent {

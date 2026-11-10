@@ -56,6 +56,7 @@ args = parser.parse_args()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_ROOT = os.environ.get("FERIDE_ROOT") or os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 BUNDLED_BASE_DIR = os.path.join(APP_ROOT, "models", "whisper", "base")
+BUNDLED_SMALL_DIR = os.path.join(APP_ROOT, "models", "whisper", "small")
 
 _model_lock = threading.Lock()
 _backend = None
@@ -113,7 +114,9 @@ def _init_model():
     # 2. Yerleşik hızlı motor: faster-whisper (CTranslate2 int8 — tüm işletim sistemlerinde çalışır)
     from faster_whisper import WhisperModel
 
-    cached_small = _find_cached_hf_snapshot("models--Systran--faster-whisper-small")
+    # Kurulumla gelen 'small' (Türkçede base'den belirgin biçimde daha doğru) varsa onu kullan.
+    cached_small = BUNDLED_SMALL_DIR if os.path.isfile(os.path.join(BUNDLED_SMALL_DIR, "model.bin")) else None
+    cached_small = cached_small or _find_cached_hf_snapshot("models--Systran--faster-whisper-small")
     if cached_small:
         log.info("Önbellekteki faster-whisper-small yükleniyor: %s", cached_small)
         _model = WhisperModel(cached_small, device="cpu", compute_type="int8")

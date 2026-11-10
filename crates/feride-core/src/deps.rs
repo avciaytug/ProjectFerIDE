@@ -275,13 +275,13 @@ impl Deps {
         v.push(DepStatus {
             id: "voice".into(),
             name: "Ses paketi (Whisper + Feride sesi)".into(),
-            description: "Konuşmayı yazıya çevirme ve Türkçe sesli yanıt. Tamamen yerel çalışır.".into(),
+            description: "Konuşmayı yazıya çevirme, Türkçe sesli yanıt ve canlı sesli sohbet. Tamamen yerel çalışır.".into(),
             required: false,
             installed: voice_ok,
             version: None,
             path: None,
             needs_admin: false,
-            size_hint: "1,2 GB".into(),
+            size_hint: "1,7 GB".into(),
             note: Some("uv gerektirir".into()),
             applicable: true,
         });
@@ -742,11 +742,15 @@ impl Deps {
                 self.download("voice", url, &dest, "Türkçe ses modeli").await?;
             }
         }
-        let wdir = models.join("whisper").join("base");
-        for f in ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"] {
-            let dest = wdir.join(f);
-            if !dest.is_file() {
-                self.download("voice", &format!("https://huggingface.co/Systran/faster-whisper-base/resolve/main/{f}"), &dest, "Whisper").await?;
+        // base: hızlı yedek; small: Türkçe konuşma tanımada belirgin biçimde daha doğru (canlı sohbet için).
+        for size in ["base", "small"] {
+            let wdir = models.join("whisper").join(size);
+            for f in ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"] {
+                let dest = wdir.join(f);
+                if !dest.is_file() {
+                    let url = format!("https://huggingface.co/Systran/faster-whisper-{size}/resolve/main/{f}");
+                    self.download("voice", &url, &dest, &format!("Whisper {size}")).await?;
+                }
             }
         }
         Ok(())

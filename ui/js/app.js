@@ -137,7 +137,8 @@ export function renderStatusbar() {
     const pct = Math.round((S.usage.prompt_tokens / S.usage.ctx) * 100);
     sb.append(h('span', { class: 'item', title: 'Son istekte kullanılan bağlam' }, `Doluluk %${pct}`));
   }
-  if (S.usage?.tps) sb.append(h('span', { class: 'item' }, icon('zap'), `${S.usage.tps.toFixed(1)} token/sn`));
+  const tps = S.usage?.turn?.tps ?? S.usage?.tps;
+  if (tps) sb.append(h('span', { class: 'item', title: 'Son turun ortalama üretim hızı' }, icon('zap'), `${tps.toFixed(1).replace('.', ',')} token/sn`));
   sb.append(h('span', { class: 'item' }, `FerIDE ${S.info?.display_version || ''}`));
 }
 
@@ -159,6 +160,7 @@ export async function saveSettings(patch) {
     S.settings = await S.rpc.call('settings.set', { patch });
     applyTheme();
     renderTopbar();
+    Chat.updateHint?.();
     return S.settings;
   } catch (e) {
     toast(`Ayar kaydedilemedi: ${e.message}`, 'err');
@@ -220,6 +222,7 @@ function setupShortcuts() {
     else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); showSide('search'); }
     else if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); Chat.focusComposer(); }
     else if (mod && e.key.toLowerCase() === 'n' && e.shiftKey) { e.preventDefault(); Chat.newChat(); }
+    else if (mod && e.key.toLowerCase() === 'v' && e.shiftKey) { e.preventDefault(); import('./views/live.js').then((l) => (l.isActive() ? l.close() : l.open())); }
   });
 }
 
@@ -242,7 +245,7 @@ async function boot() {
   renderTopbar();
 
   S.rpc.on('model.status', (st) => { S.model = st; renderTopbar(); renderStatusbar(); Models.onStatus?.(st); Chat.updateHint?.(); });
-  S.rpc.on('settings.changed', (s) => { S.settings = s; applyTheme(); renderTopbar(); });
+  S.rpc.on('settings.changed', (s) => { S.settings = s; applyTheme(); renderTopbar(); Chat.updateHint?.(); });
   S.rpc.on('agent', (ev) => {
     if (ev.kind === 'usage') { S.usage = ev; renderStatusbar(); }
     if (ev.kind === 'done') refreshGit();

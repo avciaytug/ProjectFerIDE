@@ -578,8 +578,14 @@ impl LlamaManager {
             g.kill = None;
         }
         let s = self.status();
-        let msg = format!("Model sunucusu beklenmedik şekilde kapandı. {}", explain_failure(&self.logs().join("
-"), code));
+        let logs = self.logs();
+        let msg = format!("Model sunucusu beklenmedik şekilde kapandı. {}", explain_failure(&logs.join("\n"), code));
+        // Yeniden başlatmada günlük sıfırlanır; nedeni kalıcı günlüğe de yaz.
+        tracing::warn!(
+            "llama-server kapandı (kod {code:?}): {}\n{}",
+            s.model_name.as_deref().unwrap_or("?"),
+            logs.iter().rev().take(25).rev().cloned().collect::<Vec<_>>().join("\n")
+        );
         self.set_status(ModelStatus {
             state: "failed".into(),
             error: Some(msg),

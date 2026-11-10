@@ -1,8 +1,10 @@
 // Ajan paneli: sohbet, araç kartları, onaylar, yapılacaklar, ses.
-import { S, placementLabel } from '../app.js';
-import { h, icon, toast, renderMarkdown, basename, store, confirmBox, copyText } from '../util.js';
+import { S, placementLabel, saveSettings } from '../app.js';
+import { h, icon, toast, renderMarkdown, basename, store, confirmBox, copyText, fmtBytes } from '../util.js';
+import { Mic, encodeWav, bytesToB64 } from '../audio.js';
 import * as Editor from './editor.js';
 import * as Sessions from './sessions.js';
+import * as Live from './live.js';
 
 let root;
 let msgsEl;
@@ -17,7 +19,10 @@ let running = false;
 let attachments = []; // dataURL
 let live = null; // canlı tur durumu
 let checkpoints = [];
-let recorder = null;
+let dictation = null; // { mic, frames }
+let footEl = null;
+let lastUsage = null; // son turun toplam kullanımı
+let modelCache = null;
 
 export const currentId = () => session;
 
@@ -45,7 +50,9 @@ export function init(el) {
   fileIn.addEventListener('change', () => { for (const f of fileIn.files) addImage(f); fileIn.value = ''; });
   attachRow = h('div', { class: 'attach-row hidden' });
   sendBtn = h('button', { class: 'send-btn', title: 'Gönder', onclick: () => (running ? stop() : send()) }, icon('send'));
-  const micBtn = h('button', { class: 'icon-btn mic', title: 'Sesle yaz (ses paketi gerekir)', onclick: () => toggleMic(micBtn) }, icon('mic'));
+  const micBtn = h('button', { class: 'icon-btn mic', title: 'Sesle yaz: konuş, bitince tekrar bas (ses paketi gerekir)', onclick: () => toggleMic(micBtn) }, icon('mic'));
+  const liveBtn = h('button', { class: 'live-start', title: 'Canlı sesli sohbet (Ctrl+Shift+V)', onclick: () => Live.open() }, icon('waves'), h('span', {}, 'Canlı'));
+  footEl = h('div', { class: 'composer-foot' });
   const composer = h('div', { id: 'composer' },
     h('div', { class: 'chat-inner' },
       h('div', { class: 'composer-box', ondragover: (e) => e.preventDefault(), ondrop: onDrop },
@@ -55,7 +62,9 @@ export function init(el) {
           micBtn, fileIn,
           h('span', { class: 'spacer' }),
           h('span', { class: 'muted tiny', id: 'composer-hint' }),
-          sendBtn))));
+          liveBtn,
+          sendBtn)),
+      footEl));
   root.append(head, msgsEl, todosEl, composer);
   if (session) load(session); else renderEmpty();
   updateHint();
@@ -66,6 +75,134 @@ export function updateHint() {
   if (!el) return;
   const m = S.model;
   el.textContent = S.settings?.provider?.kind === 'openai' ? 'uzak model' : m?.state === 'ready' ? `${placementLabel(m.placement)} • ${Math.round((m.ctx || 0) / 1024)}K` : '';
+  renderFoot();
+}
+
+// ---------------------------------------------------------------- alt çubuk: düşünme, model, kullanım
+export function fmtTok(n) {
+  if (n == null) return '–';
+  if (n < 1000) return String(n);
+  if (n < 10000) return `${(n / 1000).toFixed(1).replace('.', ',')}K`;
+  return `${Math.round(n / 1000)}K`;
+}
+
+const fmtNum = (v, d = 1) => (v == null ? '–' : v.toFixed(d).replace('.', ','));
+
+function usageTitle(u) {
+  return [
+    `Girdi (bağlam): ${u.input?.toLocaleString('tr-TR') ?? '–'} token${u.ctx ? ` / ${u.ctx.toLocaleString('tr-TR')}` : ''}`,
+    u.steps > 1 ? `Bu turda işlenen toplam girdi: ${u.input_total?.toLocaleString('tr-TR')} token (${u.steps} model adımı)` : null,
+    u.cached ? `Önbellekten gelen: ${u.cached.toLocaleString('tr-TR')} token` : null,
+    `Çıktı: ${u.output?.toLocaleString('tr-TR') ?? '–'} token`,
+    `Ortalama üretim hızı: ${fmtNum(u.tps)} token/sn`,
+    u.prompt_tps ? `İstem işleme hızı: ${fmtNum(u.prompt_tps, 0)} token/sn` : null,
+    u.gen_seconds ? `Üretim süresi: ${fmtNum(u.gen_seconds)} sn` : null,
+  ].filter(Boolean).join('\n');
+}
+
+function statsEl(u, seconds) {
+  if (!u) return null;
+  return h('div', { class: 'turn-stats', title: usageTitle(u) },
+    h('span', {}, '↑ ', h('b', {}, fmtTok(u.input)), ' girdi'),
+    h('span', {}, '↓ ', h('b', {}, fmtTok(u.output)), ' çıktı'),
+    h('span', {}, icon('zap'), h('b', {}, fmtNum(u.tps)), ' token/sn'),
+    seconds ? h('span', {}, `${fmtNum(seconds, seconds < 10 ? 1 : 0)} sn`) : null);
+}
+
+function renderFoot() {
+  if (!footEl) return;
+  footEl.innerHTML = '';
+  const thinking = !!S.settings?.agent?.thinking;
+  const think = h('button', {
+    class: `pill ${thinking ? 'on' : ''}`,
+    title: thinking
+      ? 'Düşünme açık: model yanıt vermeden önce akıl yürütür (daha isabetli, daha yavaş). Kapatmak için tıkla.'
+      : 'Düşünme kapalı: model doğrudan yanıt verir (daha hızlı). Açmak için tıkla. Qwen3 gibi düşünebilen modellerde etkilidir.',
+    onclick: async () => {
+      await saveSettings({ agent: { thinking: !thinking } }).catch(() => {});
+      renderFoot();
+    },
+  }, icon('brain'), h('span', {}, 'Düşünme'), h('span', { class: 'sw' }));
+
+  const remote = S.settings?.provider?.kind === 'openai';
+  const st = S.model?.state || 'idle';
+  const dot = remote ? 'ok' : { ready: 'ok', starting: 'warn', stopping: 'warn', failed: 'err' }[st] || '';
+  let name;
+  if (remote) name = S.settings.provider.model || 'Uzak model';
+  else if (S.model?.model_name && st !== 'idle') name = S.model.model_name;
+  else name = S.settings?.model?.selected ? basename(S.settings.model.selected).replace(/\.gguf$/i, '') : 'Model seç';
+  const picker = h('button', { class: 'pill model-pick', title: 'Model seç', onclick: (e) => modelMenu(e.currentTarget) },
+    h('span', { class: `dot ${dot}` }), h('span', { class: 'nowrap name' }, name),
+    st === 'starting' && !remote ? h('span', { class: 'muted' }, 'yükleniyor…') : null, icon('chevD'));
+
+  footEl.append(think, picker, h('span', { class: 'spacer' }));
+  const u = lastUsage;
+  if (u) {
+    const pct = u.ctx && u.input ? Math.min(100, Math.round((u.input / u.ctx) * 100)) : null;
+    footEl.append(h('span', { class: 'foot-stats', title: usageTitle(u) },
+      h('span', {}, '↑', fmtTok(u.input)), h('span', {}, '↓', fmtTok(u.output)),
+      u.tps ? h('span', {}, `${fmtNum(u.tps)} t/s`) : null,
+      pct != null ? h('span', { class: 'ctxbar', title: `Bağlam doluluğu %${pct}` }, h('i', { style: { width: `${pct}%` } })) : null));
+  }
+}
+
+async function modelMenu(anchor) {
+  document.querySelectorAll('.menu').forEach((m) => m.remove());
+  const menu = h('div', { class: 'menu model-menu' }, h('div', { class: 'status-line' }, icon('loader', 'spin'), 'Modeller yükleniyor…'));
+  document.body.append(menu);
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.bottom = `${innerHeight - r.top + 6}px`;
+  };
+  place();
+  const off = (e) => {
+    if (e.type === 'keydown' ? e.key === 'Escape' : !menu.contains(e.target) && !anchor.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', off);
+      document.removeEventListener('keydown', off);
+    }
+  };
+  setTimeout(() => { document.addEventListener('mousedown', off); document.addEventListener('keydown', off); }, 0);
+  try {
+    modelCache = (await S.rpc.call('models.list')).models;
+  } catch (e) { modelCache = modelCache || []; toast(e.message, 'err'); }
+  if (!menu.isConnected) return;
+  menu.innerHTML = '';
+  const remote = S.settings?.provider?.kind === 'openai';
+  const runningPath = S.model?.state !== 'idle' ? S.model?.model_path : null;
+  const pick = async (m) => {
+    menu.remove();
+    if (running) { toast('Ajan çalışırken model değiştirilemez; önce durdurun.', 'warn'); return; }
+    if (remote) await saveSettings({ provider: { kind: 'local' } }).catch(() => {});
+    if (runningPath === m.path && S.model?.state === 'ready') return;
+    try {
+      await S.rpc.call('models.start', { model: m.path });
+      toast(`${m.name} yükleniyor…`);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  if (remote) {
+    menu.append(h('div', { class: 'mi sel' }, h('span', { class: 'dot ok' }), h('div', { class: 'grow' }, h('div', {}, S.settings.provider.model || 'Uzak model'), h('div', { class: 'tiny muted' }, 'OpenAI uyumlu uç nokta'))));
+    menu.append(h('div', { class: 'sep' }));
+  }
+  menu.append(h('div', { class: 'mh' }, 'Yerel modeller'));
+  if (!modelCache.length) menu.append(h('div', { class: 'tiny muted', style: { padding: '6px 10px' } }, 'Henüz model yok.'));
+  for (const m of modelCache) {
+    const isRun = !remote && runningPath === m.path;
+    const isSel = !remote && S.settings?.model?.selected === m.path;
+    menu.append(h('div', { class: `mi ${isSel ? 'sel' : ''}`, title: m.path, onclick: () => pick(m) },
+      h('span', { class: `dot ${isRun ? (S.model.state === 'ready' ? 'ok' : 'warn') : ''}` }),
+      h('div', { class: 'grow', style: { minWidth: 0 } },
+        h('div', { class: 'nowrap' }, m.name),
+        h('div', { class: 'tiny muted' }, [fmtBytes(m.size_bytes), m.quant, m.mmproj ? 'görsel ✓' : null].filter(Boolean).join(' · '))),
+      isSel ? icon('check') : null));
+  }
+  menu.append(h('div', { class: 'sep' }));
+  if (!remote && (S.model?.state === 'ready' || S.model?.state === 'starting')) {
+    menu.append(h('div', { class: 'mi', onclick: () => { menu.remove(); S.rpc.call('models.stop'); } }, icon('stop'), 'Modeli durdur (belleği boşalt)'));
+  }
+  menu.append(h('div', { class: 'mi', onclick: () => { menu.remove(); import('./models.js').then((x) => x.open()); } }, icon('cpu'), 'Model Merkezi…'));
+  place();
 }
 
 function autosize() {
@@ -100,6 +237,12 @@ export function mention(path) {
   input.value += `${input.value && !input.value.endsWith(' ') ? ' ' : ''}\`${rel.replace(/\\/g, '/')}\` `;
   autosize();
   input.focus();
+}
+
+export const isRunning = () => running;
+export function stopRun() { return stop(); }
+export function answerApproval(id, answer) {
+  return S.rpc.call('chat.approve', { session, id, answer }).catch((e) => toast(e.message, 'err'));
 }
 
 function setRunning(r) {
@@ -163,6 +306,7 @@ export async function load(id) {
 function renderMessages(messages) {
   msgsEl.innerHTML = '';
   live = null;
+  lastUsage = null;
   const userTurns = messages.filter((m) => m.role === 'user').length;
   let turnNo = (meta?.turns || userTurns) - userTurns;
   let block = null;
@@ -176,6 +320,7 @@ function renderMessages(messages) {
       if (!block) { block = assistantBlock(); msgsEl.append(block.el); }
       if (m.reasoning) block.body.append(reasoningEl(m.reasoning));
       if (m.content) block.body.append(renderMarkdown(typeof m.content === 'string' ? m.content : ''));
+      if (m.usage) { block.body.append(statsEl(m.usage, m.usage.seconds)); lastUsage = m.usage; }
       for (const tc of m.tool_calls || []) {
         let args = {};
         try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* */ }
@@ -189,6 +334,7 @@ function renderMessages(messages) {
     }
   }
   if (!messages.length) renderEmpty();
+  renderFoot();
 }
 
 function isOkOutput(content) {
@@ -207,7 +353,7 @@ function userBubble(m, turnNo) {
   const foot = h('div', { class: 'turn-foot', style: { justifyContent: 'flex-end' } },
     h('button', { class: 'btn sm ghost', title: 'Kopyala', onclick: () => copyText(text) }, icon('copy')),
     cp ? h('button', { class: 'btn sm ghost', title: `Bu mesajdan sonra ajanın değiştirdiği ${cp.files.length}+ dosyayı geri al`, onclick: () => revert(turnNo) }, icon('undo'), 'Değişiklikleri geri al') : null);
-  return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, text), imgs.length ? h('div', { class: 'imgs' }, imgs.map((src) => h('img', { src }))) : null, foot);
+  return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, m.voice ? icon('mic', 'voice-mark') : null, text), imgs.length ? h('div', { class: 'imgs' }, imgs.map((src) => h('img', { src }))) : null, foot);
 }
 
 async function revert(turn) {
@@ -300,7 +446,9 @@ function newLiveBlock() {
   const status = h('div', { class: 'status-line' });
   b.body.append(status);
   msgsEl.append(b.el);
-  return { block: b, status, textEl: null, text: '', reasoningEl: null, cards: new Map(), approvals: new Map(), renderTimer: null };
+  const stats = h('div', { class: 'turn-stats-slot' });
+  b.el.append(stats);
+  return { block: b, status, stats, textEl: null, text: '', reasoningEl: null, cards: new Map(), approvals: new Map(), renderTimer: null };
 }
 
 function liveText() {
@@ -327,6 +475,11 @@ export function onAgentEvent(ev) {
   if (ev.kind === 'todos' && ev.session === session) renderTodos(ev.todos);
   if (ev.session !== session) return;
   if (!live && ev.kind !== 'done') live = newLiveBlock();
+  handleEvent(ev);
+  Live.onAgentEvent(ev);
+}
+
+function handleEvent(ev) {
   switch (ev.kind) {
     case 'start':
       if (ev.title_needed) setTimeout(() => S.rpc.call('chat.load', { id: session }).then((d) => { meta = d.meta; titleEl.textContent = d.meta.title; }), 300);
@@ -370,6 +523,14 @@ export function onAgentEvent(ev) {
     }
     case 'approval':
       showApproval(ev);
+      break;
+    case 'usage':
+      if (ev.turn) {
+        lastUsage = ev.turn;
+        live.stats.innerHTML = '';
+        live.stats.append(statsEl(ev.turn));
+        renderFoot();
+      }
       break;
     case 'approval_resolved': {
       const a = live.approvals.get(ev.id);
@@ -415,24 +576,37 @@ function diffPre(text) {
 
 async function finishLive(ev) {
   setRunning(false);
+  const reasons = { cancelled: 'Durduruldu.', max_steps: 'En fazla adım sayısına ulaşıldı. "Devam et" yazarak sürdürebilirsiniz.', loop: 'Aynı işlem art arda tekrarlandığı için durduruldu.', length: 'Yanıt uzunluk sınırına ulaştı; "devam et" yazın.' };
   if (live) {
     clearTimeout(live.renderTimer);
     flushText();
     live.status.remove();
     for (const a of live.approvals.values()) a.remove();
-    const reasons = { cancelled: 'Durduruldu.', max_steps: 'En fazla adım sayısına ulaşıldı. "Devam et" yazarak sürdürebilirsiniz.', loop: 'Aynı işlem art arda tekrarlandığı için durduruldu.', length: 'Yanıt uzunluk sınırına ulaştı; "devam et" yazın.' };
+    if (ev.usage) { lastUsage = ev.usage; live.stats.innerHTML = ''; live.stats.append(statsEl(ev.usage, ev.seconds)); renderFoot(); }
     if (ev.error) live.block.body.append(h('div', { class: 'error-box' }, ev.error));
     else if (reasons[ev.reason]) live.block.body.append(h('div', { class: 'status-line' }, icon('info'), reasons[ev.reason]));
     const finalText = live.text;
     live = null;
-    if (S.settings?.voice?.auto_speak && finalText && !ev.error) speak(finalText);
+    if (S.settings?.voice?.auto_speak && finalText && !ev.error && !Live.isActive()) speak(finalText);
   }
-  // Kalıcı geçmişle eşitle (geri alma düğmeleri, kimlikler).
+  // Kalıcı geçmişle eşitle (geri alma düğmeleri, kimlikler). Hata ve durdurma notları geçmişe
+  // yazılmadığı için yeniden çizimden sonra tekrar eklenir.
+  const note = () => {
+    const parts = [];
+    if (ev.error) parts.push(h('div', { class: 'error-box' }, ev.error));
+    else if (reasons[ev.reason]) parts.push(h('div', { class: 'status-line' }, icon('info'), reasons[ev.reason]));
+    if (ev.usage && ev.reason !== 'completed' && ev.reason !== 'length') parts.push(statsEl(ev.usage, ev.seconds));
+    if (!parts.length) return;
+    let body = msgsEl.lastElementChild?.classList.contains('assistant') ? msgsEl.lastElementChild.lastElementChild : null;
+    if (!body) { const b = assistantBlock(); msgsEl.append(b.el); body = b.body; }
+    body.append(...parts);
+  };
   setTimeout(() => session && S.rpc.call('chat.load', { id: session }).then((d) => {
     meta = d.meta;
     checkpoints = d.checkpoints || [];
     titleEl.textContent = d.meta.title;
     renderMessages(d.messages);
+    note();
     scrollBottom(true);
   }).catch(() => {}), 150);
   if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('FerIDE', { body: ev.error ? 'Görev hatayla bitti.' : 'Görev tamamlandı.' });
@@ -441,29 +615,48 @@ async function finishLive(ev) {
 async function send() {
   const text = input.value.trim();
   if (!text || running) return;
-  if (S.settings?.provider?.kind !== 'openai' && S.model?.state !== 'ready' && S.model?.state !== 'starting' && !S.settings?.model?.selected) {
-    toast('Önce Model Merkezi\'nden bir model seçin.', 'warn');
-    import('./models.js').then((m) => m.open());
-    return;
-  }
-  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   const images = attachments.slice();
-  if (!session) msgsEl.innerHTML = '';
-  msgsEl.append(userBubble({ content: images.length ? [{ type: 'text', text }, ...images.map((u) => ({ type: 'image_url', image_url: { url: u } }))] : text }, 0));
   input.value = '';
   attachments = [];
   renderAttachments();
   autosize();
+  if (!(await submit(text, images, false)) && !input.value) {
+    // Gönderilemediyse yazılanı geri koy.
+    input.value = text;
+    attachments = images;
+    renderAttachments();
+    autosize();
+  }
+}
+
+/** Canlı sesli sohbetten gelen metni gönderir. */
+export async function sendText(text, { voice = false } = {}) {
+  if (running) return false;
+  return submit(text, [], voice);
+}
+
+async function submit(text, images, voice) {
+  if (S.settings?.provider?.kind !== 'openai' && S.model?.state !== 'ready' && S.model?.state !== 'starting' && !S.settings?.model?.selected) {
+    toast('Önce Model Merkezi\'nden bir model seçin.', 'warn');
+    import('./models.js').then((m) => m.open());
+    return false;
+  }
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  if (!session) msgsEl.innerHTML = '';
+  const content = images.length ? [{ type: 'text', text }, ...images.map((u) => ({ type: 'image_url', image_url: { url: u } }))] : text;
+  msgsEl.append(userBubble({ content, voice }, 0));
   setRunning(true);
   live = newLiveBlock();
   live.status.append(icon('loader', 'spin'), 'Gönderiliyor…');
   scrollBottom(true);
   try {
-    const r = await S.rpc.call('chat.send', { session, text, images });
+    const r = await S.rpc.call('chat.send', { session, text, images, voice });
     if (!session) { session = r.session; store('session', session); Sessions.refresh(); }
+    return true;
   } catch (e) {
     setRunning(false);
     if (live) { live.status.remove(); live.block.body.append(h('div', { class: 'error-box' }, e.message)); live = null; }
+    return false;
   }
 }
 
@@ -484,28 +677,31 @@ function renderTodos(todos) {
 
 // ---------------------------------------------------------------- ses
 async function toggleMic(btn) {
-  if (recorder) { recorder.stop(); return; }
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { toast(`Mikrofona erişilemedi: ${e.message}`, 'err'); return; }
-  const chunks = [];
-  recorder = new MediaRecorder(stream);
-  recorder.ondataavailable = (e) => chunks.push(e.data);
-  recorder.onstop = async () => {
+  if (dictation) {
+    const { mic, frames } = dictation;
+    dictation = null;
     btn.classList.remove('rec');
-    stream.getTracks().forEach((t) => t.stop());
-    recorder = null;
-    const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
-    const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.readAsDataURL(blob); });
+    const rate = mic.rate;
+    mic.stop();
+    if (frames.length * 1024 < rate * 0.3) return; // çok kısa
     toast('Konuşma yazıya çevriliyor…', '', 2000);
     try {
-      const text = await S.rpc.call('voice.transcribe', { audio: b64, mime: blob.type });
-      input.value += (input.value ? ' ' : '') + text;
+      // 16 kHz mono WAV: STT sunucusu ffmpeg olmadan da çözer.
+      const text = await S.rpc.call('voice.transcribe', { audio: bytesToB64(encodeWav(frames, rate)), mime: 'audio/wav' });
+      if (text) input.value += (input.value && !input.value.endsWith(' ') ? ' ' : '') + text;
       autosize();
       input.focus();
     } catch (e) { toast(e.message, 'err', 8000); }
-  };
-  recorder.start();
+    return;
+  }
+  const mic = new Mic();
+  const frames = [];
+  try {
+    await mic.start((f) => { if (frames.length < 60 * 50) frames.push(f); });
+  } catch (e) { toast(`Mikrofona erişilemedi: ${e.message}`, 'err'); return; }
+  dictation = { mic, frames };
   btn.classList.add('rec');
+  S.rpc.call('voice.warmup').catch(() => {}); // kayıt sürerken STT'yi ısıt
 }
 
 let audioEl = null;

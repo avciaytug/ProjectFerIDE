@@ -7,7 +7,8 @@ import * as Bottom from './bottom.js';
 let pageEl = null;
 let models = [];
 let downloads = new Map();
-let hubState = { query: '', results: [], repo: null, files: [], loading: false };
+let hubState = { query: '', results: [], repo: null, files: [], loading: false, searching: false, error: null, seq: 0 };
+const hubCache = new Map(); // sorgu → sonuçlar (oturum boyunca)
 let unsubs = [];
 
 export function open() {
@@ -190,25 +191,99 @@ function renderHub() {
   const box = $('m-hub');
   if (!box) return;
   box.innerHTML = '';
-  const q = h('input', { type: 'search', placeholder: 'Hugging Face\'te GGUF ara (ör. qwen3 coder, gemma 3, unsloth)…', value: hubState.query, style: { flex: 1 } });
+  const q = h('input', { type: 'search', placeholder: 'Model ara: yazmaya başla (ör. qwen3 coder, gemma 3, unsloth)…', value: hubState.query, style: { flex: 1 }, autocomplete: 'off', spellcheck: 'false' });
+  const spin = h('span', { class: 'hub-spin' });
   const results = h('div');
-  const search = async () => {
-    hubState.query = q.value.trim();
-    if (!hubState.query) return;
-    results.innerHTML = '';
-    results.append(h('div', { class: 'status-line' }, icon('loader', 'spin'), 'Aranıyor…'));
-    try {
-      hubState.results = await S.rpc.call('hub.search', { query: hubState.query });
-      hubState.repo = null;
+  // Yazarken arar: yerel eşleşmeler anında, Hugging Face sonuçları kısa bir duraksamadan sonra.
+  const run = async (immediate) => {
+    const query = q.value.trim();
+    hubState.query = query;
+    hubState.repo = null;
+    const seq = ++hubState.seq;
+    if (query.length < 2) {
+      hubState.results = [];
+      hubState.searching = false;
+      hubState.error = null;
+      spin.innerHTML = '';
       fillResults(results);
-    } catch (e) { results.innerHTML = ''; results.append(h('div', { class: 'error-box' }, e.message)); }
+      return;
+    }
+    const key = query.toLocaleLowerCase('tr-TR');
+    if (hubCache.has(key)) {
+      hubState.results = hubCache.get(key);
+      hubState.searching = false;
+      hubState.error = null;
+      spin.innerHTML = '';
+      fillResults(results);
+      return;
+    }
+    hubState.searching = true;
+    fillResults(results);
+    if (!immediate) {
+      await new Promise((r) => setTimeout(r, 280));
+      if (seq !== hubState.seq) return;
+    }
+    spin.innerHTML = '';
+    spin.append(icon('loader', 'spin'));
+    try {
+      const res = await S.rpc.call('hub.search', { query });
+      hubCache.set(key, res);
+      if (seq !== hubState.seq) return; // daha yeni bir arama başladı
+      hubState.results = res;
+      hubState.error = null;
+    } catch (e) {
+      if (seq !== hubState.seq) return;
+      hubState.results = [];
+      hubState.error = e.message;
+    }
+    hubState.searching = false;
+    spin.innerHTML = '';
+    fillResults(results);
   };
-  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
+  q.addEventListener('input', () => run(false));
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') run(true);
+    if (e.key === 'Escape') { q.value = ''; run(true); }
+  });
   box.append(h('div', { class: 'section' },
-    h('div', { class: 'sh' }, h('h3', { class: 'grow' }, 'Hugging Face\'ten indir'), h('span', { class: 'tiny muted' }, 'Kapalı (gated) modeller için Ayarlar\'a erişim jetonu girin')),
-    h('div', { class: 'row' }, q, h('button', { class: 'btn primary', onclick: search }, icon('search'), 'Ara')),
+    h('div', { class: 'sh' }, h('h3', { class: 'grow' }, 'Model ara ve indir'), h('span', { class: 'tiny muted' }, 'Kapalı (gated) modeller için Ayarlar\'a Hugging Face erişim jetonu girin')),
+    h('div', { class: 'row hub-search' }, icon('search'), q, spin),
     results));
-  if (hubState.results.length) fillResults(results);
+  fillResults(results);
+}
+
+/** Sorgunun kelimelerini metinde vurgular. */
+function highlight(text, query) {
+  const words = query.toLocaleLowerCase('tr-TR').split(/[\s/_.-]+/).filter((w) => w.length > 0);
+  if (!words.length) return text;
+  const lower = text.toLocaleLowerCase('tr-TR');
+  const marks = new Array(text.length).fill(false);
+  for (const w of words) {
+    let i = lower.indexOf(w);
+    while (i >= 0) { for (let k = i; k < i + w.length; k++) marks[k] = true; i = lower.indexOf(w, i + w.length); }
+  }
+  const out = [];
+  let buf = '';
+  let on = false;
+  for (let i = 0; i <= text.length; i++) {
+    const m = i < text.length && marks[i];
+    if (i === text.length || m !== on) {
+      if (buf) out.push(on ? h('mark', {}, buf) : buf);
+      buf = '';
+      on = m;
+    }
+    if (i < text.length) buf += text[i];
+  }
+  return out;
+}
+
+function localMatches(query) {
+  const words = query.toLocaleLowerCase('tr-TR').split(/[\s/_.-]+/).filter(Boolean);
+  if (!words.length) return [];
+  return models.filter((m) => {
+    const n = `${m.name} ${m.path}`.toLocaleLowerCase('tr-TR').replace(/[_.-]/g, ' ');
+    return words.every((w) => n.includes(w));
+  });
 }
 
 function fillResults(box) {
@@ -233,11 +308,31 @@ function fillResults(box) {
     box.append(tbl);
     return;
   }
-  if (!hubState.results.length) { box.append(h('div', { class: 'empty' }, 'Sonuç yok.')); return; }
-  const tbl = h('table', { class: 'tbl', style: { marginTop: '10px' } }, h('tr', {}, h('th', {}, 'Depo'), h('th', {}, 'İndirme'), h('th', {}, 'Güncellendi'), h('th')));
+  const query = hubState.query;
+  if (query.length < 2) {
+    box.append(h('div', { class: 'tiny muted', style: { marginTop: '8px' } }, 'Yazmaya başladığında yerel modellerin ve Hugging Face\'teki GGUF depoları burada listelenir.'));
+    return;
+  }
+  const local = localMatches(query);
+  if (local.length) {
+    box.append(h('div', { class: 'hub-group' }, 'Bu bilgisayarda'));
+    for (const m of local) {
+      box.append(h('div', { class: 'hub-local' },
+        icon('cpu'), h('span', { class: 'nowrap grow', title: m.path }, highlight(m.name, query)),
+        h('span', { class: 'tiny muted' }, fmtBytes(m.size_bytes)),
+        h('button', { class: 'btn sm primary', onclick: () => start(m.path) }, icon('play'), 'Başlat')));
+    }
+  }
+  box.append(h('div', { class: 'hub-group' }, 'Hugging Face', hubState.searching ? h('span', { class: 'tiny muted' }, ' — aranıyor…') : null));
+  if (hubState.error) { box.append(h('div', { class: 'error-box' }, hubState.error)); return; }
+  if (!hubState.results.length) {
+    if (!hubState.searching) box.append(h('div', { class: 'empty', style: { padding: '14px' } }, `"${query}" için GGUF deposu bulunamadı.`));
+    return;
+  }
+  const tbl = h('table', { class: 'tbl', style: { marginTop: '4px', opacity: hubState.searching ? '.55' : '1' } }, h('tr', {}, h('th', {}, 'Depo'), h('th', {}, 'İndirme'), h('th', {}, 'Güncellendi'), h('th')));
   for (const r of hubState.results) {
     tbl.append(h('tr', { style: { cursor: 'pointer' }, onclick: () => openRepo(r.id, box) },
-      h('td', {}, h('b', {}, r.id), r.gated ? h('span', { class: 'badge warn', style: { marginLeft: '6px' } }, 'izin gerekli') : null),
+      h('td', {}, h('b', {}, highlight(r.id, query)), r.gated ? h('span', { class: 'badge warn', style: { marginLeft: '6px' } }, 'izin gerekli') : null),
       h('td', {}, r.downloads.toLocaleString('tr-TR')),
       h('td', { class: 'muted small' }, relTime(r.updated)),
       h('td', { style: { textAlign: 'right' } }, icon('chevR'))));

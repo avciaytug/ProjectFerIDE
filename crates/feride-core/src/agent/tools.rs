@@ -585,7 +585,7 @@ fn glob_tool(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
             break;
         }
     }
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0));
     if hits.is_empty() {
         return Ok(ToolResult::ok("Eşleşen dosya yok."));
     }

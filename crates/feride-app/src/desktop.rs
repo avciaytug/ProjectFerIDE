@@ -77,7 +77,11 @@ pub fn run(url: String, origin: String, data_dir: std::path::PathBuf, quit: Arc<
                 if let Some(f) = on_exit.take() {
                     f();
                 }
+                // Temizlik bitti (alt süreçler kapatıldı, kilit dosyası silindi). Pencere/WebView
+                // sökümü sırasında tao'nun "cannot move state from Destroyed" paniğine düşmemek için
+                // süreç doğrudan sonlandırılır.
                 *control_flow = ControlFlow::Exit;
+                std::process::exit(0);
             }
             _ => {}
         }

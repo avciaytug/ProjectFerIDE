@@ -1,5 +1,35 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.2) — Canlı sesli sohbet
+
+### Yeni
+- **Canlı sesli sohbet** (Gemini Live / ChatGPT sesli mod benzeri): mesaj kutusundaki **Canlı** düğmesi ya da `Ctrl+Shift+V`.
+  Konuşmaya başladığını kendisi algılar, susunca yazıya çevirip gönderir, yanıtı model yazarken cümle cümle
+  seslendirir ve yeniden dinlemeye geçer. Tamamen yerel: konuşma algılama arayüzde, Whisper ve Türkçe ses FerIDE'nin
+  ses sunucularında.
+  - **Araya girme:** Feride konuşurken konuşmaya başlarsan susar ve görevi durdurur (kapatılabilir; hoparlör sesi
+    mikrofona kaçıyorsa kulaklık önerilir). Küreye dokunmak ya da `Boşluk` da susturur; `M` mikrofonu kapatır.
+  - **Sesle onay:** ajan bir işlem için onay isterse "evet" / "hayır" demek yeterli.
+  - Sesli turlarda ajan kısa, konuşma diliyle yanıt verir; kod blokları okunmaz, ekranda gösterilir.
+  - İlk turdan sonra konuşmanın bitişinden ilk sesli yanıta ~1,5 sn (Qwen3.8-35B-A3B, Strix Halo).
+- **Düşünme aç/kapat** mesaj kutusunun altında: düşünebilen modellerde (Qwen3, Gemma 4 …) akıl yürütmeyi tek tıkla açar.
+- **Model seçici** mesaj kutusunun altında: yerel modeller boyut, kuantizasyon ve görsel desteğiyle listelenir;
+  seçilen model hemen yüklenir. Modeli durdurma ve Model Merkezi'ne geçiş de buradan.
+- **Token ve hız bilgisi:** her yanıtın altında girdi (bağlam) ve çıktı tokenları, ortalama üretim hızı (token/sn) ve
+  süre; ayrıntıda istem işleme hızı, önbellekten gelen tokenlar ve model adımı sayısı. Mesaj kutusunun altında son
+  turun özeti ve bağlam doluluğu. Bilgiler sohbet geçmişinde saklanır.
+- **Model Merkezi'nde canlı arama:** yazmaya başlar başlamaz bu bilgisayardaki eşleşen modeller ve Hugging Face'teki GGUF
+  depoları listelenir; eşleşen kısımlar vurgulanır.
+
+### İyileştirmeler ve düzeltmeler
+- Ses paketine **Whisper small** eklendi: Türkçe konuşma tanıma base modele göre belirgin biçimde daha doğru.
+- "Sesle yaz" kaydı 16 kHz WAV olarak gönderiliyor; ffmpeg kurulu olmayan Windows'ta da yazıya çevriliyor (WebM çözülemiyordu).
+- Bir görev hatayla bittiğinde hata mesajı, sohbet yeniden yüklenince kayboluyordu; artık kalıcı.
+- Masaüstü penceresi kapatılırken oluşan "cannot move state from Destroyed" çökmesi giderildi.
+- Model sunucusu beklenmedik şekilde kapanırsa son günlük satırları `logs/feride.log`'a yazılıyor (yeniden başlatmada kaybolmuyor).
+- Uzak uç noktalarda (Ollama, LM Studio, vLLM …) üretim hızı akış süresinden hesaplanıyor.
+- macOS: izin denetiminde geçici klasörler (`/var/folders`) artık hassas sayılmıyor; CI üç platformda.
+
 ## beta v5.4 (5.4.0-beta.1) — Rust'a geçiş
 
 FerIDE baştan yazıldı. Flutter + Dart + Python yerine tek bir Rust programı: çekirdek, yerel sunucu ve WebView arayüz.

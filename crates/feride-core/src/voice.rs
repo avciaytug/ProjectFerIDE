@@ -99,6 +99,13 @@ impl Voice {
         anyhow::bail!("Ses sunucusu ({which}) 60 saniyede başlamadı.")
     }
 
+    /// Canlı sohbet öncesi iki sunucuyu da başlatır (ilk yanıt beklemesin).
+    pub async fn warmup(&self) -> anyhow::Result<()> {
+        self.ensure("stt").await?;
+        self.ensure("tts").await?;
+        Ok(())
+    }
+
     /// Ses kaydını yazıya çevirir. `audio` base64 (webm/wav/ogg).
     pub async fn transcribe(&self, audio_b64: &str, mime: &str) -> anyhow::Result<String> {
         let port = self.ensure("stt").await?;

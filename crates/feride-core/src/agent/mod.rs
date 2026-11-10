@@ -35,6 +35,58 @@ pub struct Run {
     pub cancel: CancellationToken,
     pub approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalAnswer>>>,
     pub started: Instant,
+    /// Sesli (canlı) sohbet turu: yanıtlar kısa ve konuşma diliyle istenir.
+    pub voice: bool,
+    /// Turun toplam token kullanımı (`done` olayında ve kayıtlı mesajda gösterilir).
+    pub usage: Mutex<UsageTotals>,
+}
+
+/// Bir kullanıcı turunun (tüm model adımlarının) toplam token kullanımı.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct UsageTotals {
+    pub steps: u32,
+    /// Son istekteki girdi tokenları (= o an kullanılan bağlam).
+    pub input: u64,
+    /// Tüm adımlarda işlenen girdi tokenlarının toplamı.
+    pub input_total: u64,
+    /// Önbellekten gelen (yeniden işlenmeyen) girdi tokenları toplamı.
+    pub cached: u64,
+    pub output: u64,
+    pub gen_seconds: f64,
+    /// Ortalama çıktı hızı (token/sn): toplam çıktı / toplam üretim süresi.
+    pub tps: Option<f64>,
+    /// Son istemin işlenme hızı (token/sn).
+    pub prompt_tps: Option<f64>,
+    pub ctx: i64,
+}
+
+impl UsageTotals {
+    fn add(&mut self, t: &crate::llm::Turn, n_ctx: i64) {
+        self.steps += 1;
+        self.ctx = n_ctx;
+        if let Some(p) = t.prompt_tokens {
+            self.input = p;
+            self.input_total += p;
+        }
+        self.cached += t.cached_tokens.unwrap_or(0);
+        let out = t.completion_tokens.unwrap_or(0);
+        self.output += out;
+        // Hızı bilinen adımların süresini topla; süre yoksa sunucunun hızından türet.
+        let secs = if t.gen_seconds > 0.0 {
+            t.gen_seconds
+        } else {
+            t.tokens_per_second.filter(|v| *v > 0.0).map(|v| out as f64 / v).unwrap_or(0.0)
+        };
+        self.gen_seconds += secs;
+        if self.gen_seconds > 0.05 && self.output > 0 {
+            self.tps = Some(self.output as f64 / self.gen_seconds);
+        } else if t.tokens_per_second.is_some() {
+            self.tps = t.tokens_per_second;
+        }
+        if t.prompt_per_second.is_some() {
+            self.prompt_tps = t.prompt_per_second;
+        }
+    }
 }
 
 pub struct ToolCtx {
@@ -60,7 +112,7 @@ fn emit(core: &Core, session: &str, kind: &str, mut data: Value) {
 }
 
 /// Kullanıcı mesajıyla yeni bir tur başlatır (arka planda). Oturum yoksa oluşturur.
-pub fn start(core: &Arc<Core>, session_id: Option<String>, text: String, images: Vec<String>) -> anyhow::Result<String> {
+pub fn start(core: &Arc<Core>, session_id: Option<String>, text: String, images: Vec<String>, voice: bool) -> anyhow::Result<String> {
     let settings = core.settings();
     let session_id = match session_id.filter(|s| crate::sessions::valid_id(s)) {
         Some(s) => s,
@@ -77,6 +129,8 @@ pub fn start(core: &Arc<Core>, session_id: Option<String>, text: String, images:
         cancel: CancellationToken::new(),
         approvals: Mutex::new(HashMap::new()),
         started: Instant::now(),
+        voice,
+        usage: Mutex::new(UsageTotals::default()),
     });
     core.runs.lock().unwrap().insert(session_id.clone(), run.clone());
     let core2 = Arc::clone(core);
@@ -89,7 +143,11 @@ pub fn start(core: &Arc<Core>, session_id: Option<String>, text: String, images:
             Err(e) => ("error".to_string(), Some(e.to_string())),
         };
         let reason = if run.cancel.is_cancelled() && reason != "completed" { "cancelled".to_string() } else { reason };
-        emit(&core2, &sid, "done", json!({"reason": reason, "error": error, "seconds": run.started.elapsed().as_secs_f64()}));
+        let usage = run.usage.lock().unwrap().clone();
+        let usage = if usage.steps > 0 { serde_json::to_value(&usage).ok() } else { None };
+        emit(&core2, &sid, "done", json!({
+            "reason": reason, "error": error, "seconds": run.started.elapsed().as_secs_f64(), "usage": usage, "voice": run.voice
+        }));
     });
     Ok(session_id)
 }
@@ -138,7 +196,11 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
 
     // Kullanıcı mesajını hemen kaydet (model yüklenirken uygulama kapansa bile kaybolmaz).
     let umsg = user_message(&text, &images);
-    core.sessions.append(&sid, &umsg)?;
+    let mut saved_umsg = umsg.clone();
+    if run.voice {
+        saved_umsg["voice"] = json!(true);
+    }
+    core.sessions.append(&sid, &saved_umsg)?;
     let title_needed = history.is_empty();
     core.sessions.touch(&sid, |m| {
         m.turns = turn;
@@ -183,9 +245,18 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
         model_name: &llm.model,
         subagent: false,
         plan_mode: settings.agent.permission_mode == PermissionMode::Plan,
+        voice: run.voice,
     });
     let mut messages = vec![json!({"role": "system", "content": system})];
-    messages.extend(history);
+    // Yalnızca arayüz için saklanan alanlar (düşünce, token kullanımı) modele gönderilmez.
+    messages.extend(history.into_iter().map(|mut m| {
+        if let Some(o) = m.as_object_mut() {
+            o.remove("reasoning");
+            o.remove("usage");
+            o.remove("voice");
+        }
+        m
+    }));
     messages.push(umsg);
 
     let reason = agent_loop(&ctx, &mut messages, false).await?;
@@ -251,12 +322,18 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
             Err(e) => anyhow::bail!(e.to_string()),
         };
         if is_main {
+            let totals = {
+                let mut u = ctx.run.usage.lock().unwrap();
+                u.add(&turn, ctx.n_ctx);
+                u.clone()
+            };
             emit(
                 core,
                 sid,
                 "usage",
                 json!({"prompt_tokens": turn.prompt_tokens, "completion_tokens": turn.completion_tokens,
-                       "tps": turn.tokens_per_second, "ctx": ctx.n_ctx, "step": step, "compacted": compacted}),
+                       "tps": turn.tokens_per_second, "prompt_tps": turn.prompt_per_second,
+                       "ctx": ctx.n_ctx, "step": step, "compacted": compacted, "turn": totals}),
             );
         }
 
@@ -268,7 +345,13 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
             if text.is_empty() {
                 anyhow::bail!("Model boş yanıt döndürdü.");
             }
-            let msg = json!({"role": "assistant", "content": text, "reasoning": turn.reasoning});
+            let mut msg = json!({"role": "assistant", "content": text, "reasoning": turn.reasoning});
+            if is_main {
+                if let Ok(mut u) = serde_json::to_value(&*ctx.run.usage.lock().unwrap()) {
+                    u["seconds"] = json!(ctx.run.started.elapsed().as_secs_f64());
+                    msg["usage"] = u;
+                }
+            }
             messages.push(json!({"role": "assistant", "content": text}));
             if is_main {
                 core.sessions.append(sid, &msg)?;
@@ -437,6 +520,7 @@ pub fn run_subagent<'a>(
             model_name: &parent.llm.model,
             subagent: true,
             plan_mode: explore,
+            voice: false,
         });
         let mut messages = vec![json!({"role": "system", "content": system}), json!({"role": "user", "content": task})];
         match agent_loop(&ctx, &mut messages, explore).await {

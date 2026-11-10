@@ -257,8 +257,8 @@ async fn setup(paths: Paths, ids: Vec<String>) {
             if ev.topic == "setup.progress" {
                 let d = ev.data;
                 let (done, total) = (d["done"].as_u64().unwrap_or(0), d["total"].as_u64().unwrap_or(0));
-                if total > 0 {
-                    eprint!("\r  {} … %{}      ", d["message"].as_str().unwrap_or(""), done * 100 / total);
+                if let Some(pct) = (done * 100).checked_div(total) {
+                    eprint!("\r  {} … %{pct}      ", d["message"].as_str().unwrap_or(""));
                 } else {
                     eprintln!("  {}", d["message"].as_str().unwrap_or(""));
                 }
