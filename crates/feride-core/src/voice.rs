@@ -15,6 +15,10 @@ pub struct VoiceStatus {
     pub installed: bool,
     pub stt: String,
     pub tts: String,
+    /// TTS sunucusunda gerçekten yüklenen sesler (female = Feride/Ahenk Cep, male = Fahrettin/Piper).
+    pub voices: Option<serde_json::Value>,
+    /// Ses paketi eski sürüm (kadın sesi bağımlılıkları / yeni Whisper modelleri yok): Kurulum'dan güncellenmeli.
+    pub update_needed: bool,
     pub error: Option<String>,
 }
 
@@ -28,6 +32,7 @@ pub struct Voice {
     http: reqwest::Client,
     stt: Mutex<Option<Srv>>,
     tts: Mutex<Option<Srv>>,
+    voices: Mutex<Option<serde_json::Value>>,
     start_lock: tokio::sync::Mutex<()>,
 }
 
@@ -38,6 +43,7 @@ impl Voice {
             http: reqwest::Client::builder().timeout(Duration::from_secs(120)).build().unwrap(),
             stt: Mutex::new(None),
             tts: Mutex::new(None),
+            voices: Mutex::new(None),
             start_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -51,6 +57,11 @@ impl Voice {
             installed: self.installed(),
             stt: if self.stt.lock().unwrap().is_some() { "ready".into() } else { "stopped".into() },
             tts: if self.tts.lock().unwrap().is_some() { "ready".into() } else { "stopped".into() },
+            voices: self.voices.lock().unwrap().clone(),
+            update_needed: self.installed()
+                && !std::fs::read_to_string(self.paths.pyenv().join(".feride-voice"))
+                    .unwrap_or_default()
+                    .contains(crate::deps::VOICE_PACK),
             error: None,
         }
     }
@@ -89,6 +100,11 @@ impl Voice {
         for _ in 0..240 {
             if let Ok(r) = self.http.get(&url).timeout(Duration::from_secs(2)).send().await {
                 if r.status().is_success() {
+                    if which == "tts" {
+                        if let Ok(j) = r.json::<serde_json::Value>().await {
+                            *self.voices.lock().unwrap() = Some(j["voices"].clone());
+                        }
+                    }
                     *slot.lock().unwrap() = Some(Srv { port, kill });
                     return Ok(port);
                 }
@@ -107,7 +123,9 @@ impl Voice {
     }
 
     /// Ses kaydını yazıya çevirir. `audio` base64 (webm/wav/ogg).
-    pub async fn transcribe(&self, audio_b64: &str, mime: &str) -> anyhow::Result<String> {
+    /// `vad`: false ise sunucudaki Silero VAD atlanır (kayıt arayüzde zaten konuşma olarak ayrıldıysa).
+    /// `quality`: auto | fast | accurate (bkz. `VoiceSettings::stt_quality`).
+    pub async fn transcribe(&self, audio_b64: &str, mime: &str, vad: bool, quality: &str) -> anyhow::Result<String> {
         let port = self.ensure("stt").await?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(audio_b64)?;
         if bytes.len() > 50 << 20 {
@@ -117,6 +135,9 @@ impl Voice {
             .http
             .post(format!("http://127.0.0.1:{port}/transcribe"))
             .header("Content-Type", mime)
+            .header("X-Language", "tr")
+            .header("X-Vad", if vad { "on" } else { "off" })
+            .header("X-Quality", quality)
             .body(bytes)
             .send()
             .await?;

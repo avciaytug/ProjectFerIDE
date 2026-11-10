@@ -57,11 +57,20 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_ROOT = os.environ.get("FERIDE_ROOT") or os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 BUNDLED_BASE_DIR = os.path.join(APP_ROOT, "models", "whisper", "base")
 BUNDLED_SMALL_DIR = os.path.join(APP_ROOT, "models", "whisper", "small")
+BUNDLED_TURBO_DIR = os.path.join(APP_ROOT, "models", "whisper", "large-v3-turbo")
+# CTranslate2 varsayılan olarak 4 iş parçacığı kullanır; çok çekirdekli işlemcilerde biraz artır.
+CPU_THREADS = int(os.environ.get("FERIDE_STT_THREADS", "0")) or max(4, min(16, (os.cpu_count() or 8) // 2))
+BEAM_SIZE = int(os.environ.get("FERIDE_STT_BEAM", "5"))
+# "auto" kipinde hızlı modelin sonucu bu ortalama log-olasılığın altındaysa doğru modelle yeniden çevrilir.
+AUTO_LOGPROB = float(os.environ.get("FERIDE_STT_AUTO_LOGPROB", "-0.28"))
 
 _model_lock = threading.Lock()
 _backend = None
 _model_label = "initializing"
 _model = None
+# İkinci, daha doğru (ve daha yavaş) model: large-v3-turbo. "auto" ve "accurate" kiplerinde kullanılır.
+_accurate = None
+_accurate_label = None
 
 
 def _find_cached_hf_snapshot(repo_folder_name: str):
@@ -114,20 +123,34 @@ def _init_model():
     # 2. Yerleşik hızlı motor: faster-whisper (CTranslate2 int8 — tüm işletim sistemlerinde çalışır)
     from faster_whisper import WhisperModel
 
-    # Kurulumla gelen 'small' (Türkçede base'den belirgin biçimde daha doğru) varsa onu kullan.
-    cached_small = BUNDLED_SMALL_DIR if os.path.isfile(os.path.join(BUNDLED_SMALL_DIR, "model.bin")) else None
-    cached_small = cached_small or _find_cached_hf_snapshot("models--Systran--faster-whisper-small")
-    if cached_small:
-        log.info("Önbellekteki faster-whisper-small yükleniyor: %s", cached_small)
-        _model = WhisperModel(cached_small, device="cpu", compute_type="int8")
+    global _accurate, _accurate_label
+
+    def has(path):
+        return os.path.isfile(os.path.join(path, "model.bin"))
+
+    def load(path, label):
+        log.info("faster-whisper-%s yükleniyor (%d iş parçacığı): %s", label, CPU_THREADS, path)
+        m = WhisperModel(path, device="cpu", compute_type="int8", cpu_threads=CPU_THREADS)
+        log.info("✅ faster-whisper (%s) hazır!", label)
+        return m
+
+    # Hızlı model: small (~1 sn). Doğru model: large-v3-turbo (~3 sn, Türkçede belirgin biçimde daha iyi).
+    small = BUNDLED_SMALL_DIR if has(BUNDLED_SMALL_DIR) else _find_cached_hf_snapshot("models--Systran--faster-whisper-small")
+    if has(BUNDLED_TURBO_DIR):
+        _accurate = load(BUNDLED_TURBO_DIR, "large-v3-turbo")
+        _accurate_label = "faster-whisper-large-v3-turbo"
+    if small:
+        _model = load(small, "small")
         _backend = "faster-whisper"
         _model_label = "faster-whisper-small"
-        log.info("✅ faster-whisper (small) hazır!")
+        return
+    if _accurate is not None:
+        _model, _backend, _model_label = _accurate, "faster-whisper", _accurate_label
         return
 
     if os.path.isfile(os.path.join(BUNDLED_BASE_DIR, "model.bin")):
         log.info("Gömülü çevrimdışı faster-whisper-base yükleniyor: %s", BUNDLED_BASE_DIR)
-        _model = WhisperModel(BUNDLED_BASE_DIR, device="cpu", compute_type="int8")
+        _model = WhisperModel(BUNDLED_BASE_DIR, device="cpu", compute_type="int8", cpu_threads=CPU_THREADS)
         _backend = "faster-whisper"
         _model_label = "faster-whisper-base (embedded)"
         log.info("✅ Gömülü faster-whisper (base) 0 internetle anında hazır!")
@@ -247,8 +270,48 @@ def remove_dc(x: np.ndarray, win: int = 801) -> np.ndarray:
     return x.astype(np.float32)
 
 
-def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr") -> str:
-    audio_f32 = remove_dc(decode_audio_bytes_to_16k_float32(audio_bytes))
+def _faster(model, audio_f32: np.ndarray, lang: str, vad: bool):
+    """faster-whisper ile çevirir; (metin, ortalama log-olasılık) döndürür."""
+    kwargs = dict(
+        language=lang or "tr",
+        beam_size=BEAM_SIZE,
+        condition_on_previous_text=False,
+        initial_prompt=INITIAL_PROMPT,
+        without_timestamps=True,
+    )
+    try:
+        # Arayüz konuşmayı zaten ayırdıysa (canlı sohbet) Silero VAD kapalı: kısık ya da alışılmadık
+        # mikrofonlarda kaydın tamamını "konuşma yok" diye atabiliyordu.
+        segments, _ = model.transcribe(audio_f32, vad_filter=vad,
+                                       vad_parameters={"min_silence_duration_ms": 500, "threshold": 0.35}, **kwargs)
+        seg_list = list(segments)
+    except Exception as vad_err:
+        log.warning("VAD filtresi atlandı, doğrudan deşifre uygulanıyor: %s", vad_err)
+        segments, _ = model.transcribe(audio_f32, vad_filter=False, **kwargs)
+        seg_list = list(segments)
+    # Konuşma arayüzde algılandıysa (vad=False) "konuşma yok" olasılığına daha az güven.
+    keep = [g for g in seg_list if getattr(g, "no_speech_prob", 0.0) < (0.70 if vad else 0.90)]
+    text = " ".join(g.text.strip() for g in keep)
+    logprob = float(np.mean([g.avg_logprob for g in keep])) if keep else -9.0
+    return text, logprob
+
+
+def _clean(text: str) -> str:
+    text = HALLUCINATION_RE.sub("", text.strip())
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"^[\.,\?!\s]+", "", text)
+
+
+def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr", vad: bool = True, quality: str = "auto") -> str:
+    raw = decode_audio_bytes_to_16k_float32(audio_bytes)
+    if len(raw) == 0:
+        return ""
+    # Tanı: mikrofon sorunlarını (DC kayması, çok kısık ses) günlükten görebilmek için.
+    dc = float(np.mean(raw))
+    rms = float(np.sqrt(np.mean((raw - dc) ** 2))) + 1e-9
+    log.info("Giriş: %.2f sn, tepe=%.3f, RMS=%.1f dBFS, DC=%.3f, VAD=%s, kip=%s",
+             len(raw) / 16000, float(np.max(np.abs(raw))), 20 * np.log10(rms), dc, "açık" if vad else "kapalı", quality)
+    audio_f32 = remove_dc(raw)
     if len(audio_f32) < 1600:  # < 0.1 saniye
         return ""
 
@@ -258,59 +321,35 @@ def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr") -> str:
         log.info("Ses tepe genliği çok düşük (peak=%.5f), sessizlik olarak atlandı.", peak)
         return ""
 
-    # Çok kısık mikrofon kayıtlarını hafifçe normalize et
-    if 0.003 <= peak < 0.12:
-        gain = min(8.0, 0.35 / peak)
+    # Kısık kayıtları duyulur düzeye getir
+    if peak < 0.3:
+        gain = min(20.0, 0.6 / peak)
         audio_f32 = np.clip(audio_f32 * gain, -1.0, 1.0)
 
-    text = ""
     with _model_lock:
-        active_model = _model
-        active_backend = _backend
+        fast, accurate, backend = _model, _accurate, _backend
 
-    if active_backend == "openai-whisper":
-        result = active_model.transcribe(
-            audio_f32,
-            language=lang if lang else "tr",
-            task="transcribe",
-            condition_on_previous_text=False,
-            initial_prompt=INITIAL_PROMPT,
-        )
-        for segment in result.get("segments", []):
-            if segment.get("no_speech_prob", 0.0) < 0.65:
-                text += segment.get("text", "") + " "
+    if backend == "openai-whisper":
+        result = fast.transcribe(audio_f32, language=lang or "tr", task="transcribe",
+                                 condition_on_previous_text=False, initial_prompt=INITIAL_PROMPT)
+        text = " ".join(g.get("text", "") for g in result.get("segments", []) if g.get("no_speech_prob", 0.0) < 0.65)
+        return _clean(text)
+
+    import time as _t
+    t0 = _t.time()
+    if quality == "accurate" and accurate is not None:
+        text, lp = _faster(accurate, audio_f32, lang, vad)
+        used = "turbo"
     else:
-        try:
-            segments, _ = active_model.transcribe(
-                audio_f32,
-                language=lang if lang else "tr",
-                beam_size=3,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 350},
-                condition_on_previous_text=False,
-                initial_prompt=INITIAL_PROMPT,
-            )
-            seg_list = list(segments)
-        except Exception as vad_err:
-            log.warning("VAD filtresi atlandı, doğrudan deşifre uygulanıyor: %s", vad_err)
-            segments, _ = active_model.transcribe(
-                audio_f32,
-                language=lang if lang else "tr",
-                beam_size=3,
-                vad_filter=False,
-                condition_on_previous_text=False,
-                initial_prompt=INITIAL_PROMPT,
-            )
-            seg_list = list(segments)
-
-        for seg in seg_list:
-            if getattr(seg, "no_speech_prob", 0.0) < 0.70:
-                text += seg.text + " "
-
-    text = HALLUCINATION_RE.sub("", text.strip())
-    text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"^[\.,\?!\s]+", "", text)
-    return text
+        text, lp = _faster(fast, audio_f32, lang, vad)
+        used = "hızlı"
+        # Belirsiz ya da boş sonuç: doğru modelle bir kez daha dene.
+        if quality == "auto" and accurate is not None and accurate is not fast and (lp < AUTO_LOGPROB or not _clean(text)):
+            log.info("Hızlı model emin değil (logprob=%.3f): %r — turbo ile yeniden çevriliyor", lp, text)
+            text, lp = _faster(accurate, audio_f32, lang, vad)
+            used = "hızlı→turbo"
+    log.info("Çeviri: %s, %.2f sn, logprob=%.3f", used, _t.time() - t0, lp)
+    return _clean(text)
 
 
 class STTRequestHandler(BaseHTTPRequestHandler):
@@ -346,7 +385,9 @@ class STTRequestHandler(BaseHTTPRequestHandler):
                                 audio_data = payload_part
                                 break
                 lang = self.headers.get("X-Language", "tr").strip() or "tr"
-                text = transcribe_audio_bytes(audio_data, lang=lang)
+                vad = self.headers.get("X-Vad", "on").strip().lower() != "off"
+                quality = self.headers.get("X-Quality", "auto").strip().lower()
+                text = transcribe_audio_bytes(audio_data, lang=lang, vad=vad, quality=quality)
                 log.info("Deşifre tamamlandı (%d bayt) -> %r", len(audio_data), text)
                 payload = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)

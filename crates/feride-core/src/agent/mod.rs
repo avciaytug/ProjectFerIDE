@@ -237,26 +237,7 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
         n_ctx,
         run: run.clone(),
     };
-    let system = prompt::build(&prompt::PromptInput {
-        core,
-        workspace: &workspace,
-        shell: &shell,
-        user_text: &text,
-        model_name: &llm.model,
-        subagent: false,
-        plan_mode: settings.agent.permission_mode == PermissionMode::Plan,
-        voice: run.voice,
-    });
-    let mut messages = vec![json!({"role": "system", "content": system})];
-    // Yalnızca arayüz için saklanan alanlar (düşünce, token kullanımı) modele gönderilmez.
-    messages.extend(history.into_iter().map(|mut m| {
-        if let Some(o) = m.as_object_mut() {
-            o.remove("reasoning");
-            o.remove("usage");
-            o.remove("voice");
-        }
-        m
-    }));
+    let mut messages = base_messages(core, &settings, &workspace, &shell, &llm.model, history, &text, run.voice);
     messages.push(umsg);
 
     let reason = agent_loop(&ctx, &mut messages, false).await?;
@@ -265,21 +246,113 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
     Ok(reason)
 }
 
+/// Sistem istemi + modele gidecek geçmiş. Ana tur ve ön ısıtma aynı içeriği üretmeli ki llama-server
+/// önceki işlemenin önbelleğini (KV) kullanabilsin.
+#[allow(clippy::too_many_arguments)]
+fn base_messages(
+    core: &Core,
+    settings: &Settings,
+    workspace: &std::path::Path,
+    shell: &Shell,
+    model_name: &str,
+    history: Vec<Value>,
+    text: &str,
+    voice: bool,
+) -> Vec<Value> {
+    // Hafıza araması oturumun ilk mesajına göre yapılır; böylece sistem istemi her turda aynı kalır ve model
+    // önceki turları yeniden işlemez. Sesli sohbette istem tamamen sabit olsun diye ilgili hafıza eklenmez
+    // (ajan gerekirse `recall` ile bakar); böylece istem kullanıcı konuşmadan önce işlenebilir.
+    let first_text = if voice {
+        String::new()
+    } else {
+        history
+            .iter()
+            .find(|m| m["role"] == "user")
+            .map(|m| crate::sessions::content_text(&m["content"]))
+            .unwrap_or_else(|| text.to_string())
+    };
+    let system = prompt::build(&prompt::PromptInput {
+        core,
+        workspace,
+        shell,
+        user_text: &first_text,
+        model_name,
+        subagent: false,
+        plan_mode: settings.agent.permission_mode == PermissionMode::Plan,
+        voice,
+    });
+    let mut messages = vec![json!({"role": "system", "content": system})];
+    // Yalnızca arayüz için saklanan alanlar (düşünce, token kullanımı, ses işareti) modele gönderilmez.
+    messages.extend(history.into_iter().map(|mut m| {
+        if let Some(o) = m.as_object_mut() {
+            o.remove("reasoning");
+            o.remove("usage");
+            o.remove("voice");
+        }
+        m
+    }));
+    messages
+}
+
+/// Yerleşik + MCP araç tanımları (sıralı, her çağrıda aynı).
+fn tool_specs_for(core: &Core, explore_only: bool, main: bool) -> Vec<Value> {
+    let docs = core.paths.pyenv().join(".feride-docs").exists();
+    let mut specs = tools::builtin_specs(explore_only, main, docs);
+    if !explore_only {
+        for t in core.mcp.tools() {
+            specs.push(json!({"type": "function", "function": {
+                "name": t.full_name, "description": format!("[MCP: {}] {}", t.server, t.description), "parameters": t.input_schema
+            }}));
+        }
+    }
+    specs
+}
+
+/// Ön ısıtma: sistem istemini, araçları ve sohbet geçmişini modele bir kez işletir (1 token üretir).
+/// Canlı sohbet açılınca çağrılır; kullanıcı ilk cümlesini söylerken ~8K tokenlık istem hazır olur.
+/// Model yüklü değilse yükler. Hatalar yalnızca günlüğe yazılır.
+pub async fn prewarm(core: &Arc<Core>, session_id: Option<String>, voice: bool) {
+    let res: anyhow::Result<()> = async {
+        let sid = session_id.filter(|s| crate::sessions::valid_id(s));
+        if let Some(s) = &sid {
+            if core.runs.lock().unwrap().contains_key(s) {
+                return Ok(()); // görev zaten çalışıyor
+            }
+        }
+        let settings = core.settings();
+        let (workspace, history) = match &sid {
+            Some(s) => {
+                let meta = core.sessions.meta(s)?;
+                (meta.workspace.clone().filter(|w| w.is_dir()).unwrap_or_else(|| core.workspace()), core.sessions.messages(s)?)
+            }
+            None => (core.workspace(), vec![]),
+        };
+        let (llm, _n_ctx, _vision) = core.llm(&|_| {}).await?;
+        let shell = Shell::detect(&core.paths, &settings.agent.shell);
+        let mut messages = base_messages(core, &settings, &workspace, &shell, &llm.model, history, "", voice);
+        // Sohbet şablonları bir kullanıcı mesajı bekler; önek (sistem + geçmiş) gerçek istekle aynıdır.
+        messages.push(json!({"role": "user", "content": "."}));
+        let tool_specs = tool_specs_for(core, false, true);
+        let opts = CompleteOptions { tools: &tool_specs, temperature: settings.agent.temperature, max_tokens: 1, thinking: settings.agent.thinking };
+        let started = Instant::now();
+        let mut sink = |_d: Delta| {};
+        let t = llm.complete(&messages, &opts, &CancellationToken::new(), &mut sink).await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        tracing::info!("ön ısıtma: {} token, {:.1} sn", t.prompt_tokens.unwrap_or(0), started.elapsed().as_secs_f64());
+        Ok(())
+    }
+    .await;
+    if let Err(e) = res {
+        tracing::warn!("ön ısıtma yapılamadı: {e}");
+    }
+}
+
 /// Asıl döngü. `messages[0]` sistem mesajı. Ana ajan ve alt ajan aynı döngüyü kullanır.
 /// Ana ajanda üretilen her mesaj oturuma eklenir.
 async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool) -> anyhow::Result<String> {
     let core = &ctx.core;
     let sid = &ctx.session_id;
     let is_main = ctx.depth == 0;
-    let docs = core.paths.pyenv().join(".feride-docs").exists();
-    let mut tool_specs = tools::builtin_specs(explore_only, ctx.depth == 0, docs);
-    if !explore_only {
-        for t in core.mcp.tools() {
-            tool_specs.push(json!({"type": "function", "function": {
-                "name": t.full_name, "description": format!("[MCP: {}] {}", t.server, t.description), "parameters": t.input_schema
-            }}));
-        }
-    }
+    let tool_specs = tool_specs_for(core, explore_only, is_main);
     let reserve = context::tools_tokens(&tool_specs) + 4096;
     let max_steps = if is_main { ctx.settings.agent.max_steps } else { 40 };
     let mut recent_calls: Vec<String> = vec![];

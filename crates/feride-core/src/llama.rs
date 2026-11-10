@@ -306,9 +306,19 @@ impl LlamaManager {
         let server = crate::deps::find_llama_server(&self.paths, settings)
             .ok_or_else(|| anyhow::anyhow!("llama.cpp kurulu değil. Kurulum sihirbazından kurun."))?;
         let model = req.model.clone();
+        let t0 = Instant::now();
         let info = tokio::task::spawn_blocking(move || gguf::read(&model)).await?;
+        let t_gguf = t0.elapsed();
         let hw = self.hardware(Some(&server), true).await;
+        let t_hw = t0.elapsed();
         let flags = self.flags(&server).await;
+        tracing::debug!(
+            "plan süreleri: gguf {:.2} sn, donanım {:.2} sn, bayraklar {:.2} sn ({} bayrak)",
+            t_gguf.as_secs_f64(),
+            (t_hw - t_gguf).as_secs_f64(),
+            (t0.elapsed() - t_hw).as_secs_f64(),
+            flags.len()
+        );
         let size = gguf::split_parts(&req.model).iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>();
         let mmproj_extra = find_mmproj(&req.model, &self.model_dirs(settings))
             .and_then(|m| std::fs::metadata(m).ok())

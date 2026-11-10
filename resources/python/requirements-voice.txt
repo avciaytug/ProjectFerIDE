@@ -5,3 +5,7 @@ piper-tts>=1.2.0
 onnxruntime>=1.18
 # Ahenk Cep (Feride sesi) PyTorch modeli için; CPU sürümü yeterli.
 torch>=2.3
+# Feride sesi (Ahenk Cep): EMA Lightning akustik modeli + Türkçe metin normalleştirme (trnorm).
+# Kaynak: github.com/ozguradmin/ahenk-turkish-tts (Apache-2.0), değişmez bir commit'e sabitlenmiştir.
+ema-lightning==1.1.2
+trnorm[tts] @ https://github.com/ozguradmin/ahenk-turkish-tts/archive/8981df9354a6dc95a3a2b4730b7fbff196dda219.zip

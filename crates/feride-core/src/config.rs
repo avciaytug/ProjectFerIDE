@@ -147,11 +147,13 @@ pub struct VoiceSettings {
     pub voice: String,
     pub speed: f32,
     pub auto_speak: bool,
+    /// Konuşma tanıma: auto (hızlı model, emin değilse doğru model) | fast (small) | accurate (large-v3-turbo)
+    pub stt_quality: String,
 }
 
 impl Default for VoiceSettings {
     fn default() -> Self {
-        Self { enabled: false, voice: "female".into(), speed: 1.0, auto_speak: false }
+        Self { enabled: false, voice: "female".into(), speed: 1.0, auto_speak: false, stt_quality: "auto".into() }
     }
 }
 

@@ -15,6 +15,9 @@ use crate::config::Settings;
 use crate::events::EventBus;
 use crate::paths::Paths;
 
+/// Ses paketi sürümü (işaret dosyasına yazılır). Yeni model ya da bağımlılık eklenince artırılır.
+pub const VOICE_PACK: &str = "voice-pack-2";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct DepStatus {
     pub id: String,
@@ -271,7 +274,10 @@ impl Deps {
             applicable: true,
         });
 
-        let voice_ok = py.is_file() && self.paths.pyenv().join(".feride-voice").exists();
+        // İşaret dosyası paket sürümünü taşır; eski kurulumlar (kadın sesi bağımlılıkları ve yeni
+        // Whisper modelleri olmadan) "güncelleme gerekli" görünür.
+        let voice_marker = std::fs::read_to_string(self.paths.pyenv().join(".feride-voice")).unwrap_or_default();
+        let voice_ok = py.is_file() && voice_marker.contains(VOICE_PACK);
         v.push(DepStatus {
             id: "voice".into(),
             name: "Ses paketi (Whisper + Feride sesi)".into(),
@@ -281,8 +287,12 @@ impl Deps {
             version: None,
             path: None,
             needs_admin: false,
-            size_hint: "1,7 GB".into(),
-            note: Some("uv gerektirir".into()),
+            size_hint: "3,5 GB".into(),
+            note: Some(if !voice_marker.is_empty() && !voice_ok {
+                "Güncelleme gerekli: Feride (kadın) sesi ve daha doğru Türkçe konuşma tanıma".into()
+            } else {
+                "uv gerektirir".into()
+            }),
             applicable: true,
         });
 
@@ -724,7 +734,8 @@ impl Deps {
         if pack == "voice" {
             self.fetch_voice_models().await?;
         }
-        std::fs::write(pyenv.join(format!(".feride-{pack}")), crate::util::now_iso())?;
+        let marker = if pack == "voice" { format!("{VOICE_PACK} {}", crate::util::now_iso()) } else { crate::util::now_iso() };
+        std::fs::write(pyenv.join(format!(".feride-{pack}")), marker)?;
         Ok(if pack == "docs" { "Belge ve CAD stüdyosu kuruldu.".into() } else { "Ses paketi kuruldu.".into() })
     }
 
@@ -742,7 +753,17 @@ impl Deps {
                 self.download("voice", url, &dest, "Türkçe ses modeli").await?;
             }
         }
-        // base: hızlı yedek; small: Türkçe konuşma tanımada belirgin biçimde daha doğru (canlı sohbet için).
+        // large-v3-turbo: Türkçede en doğrusu (~3 sn); "otomatik" kipte hızlı modelin emin olmadığı
+        // cümlelerde ve "sesle yaz"da kullanılır.
+        let turbo = models.join("whisper").join("large-v3-turbo");
+        for f in ["config.json", "preprocessor_config.json", "tokenizer.json", "vocabulary.json", "model.bin"] {
+            let dest = turbo.join(f);
+            if !dest.is_file() {
+                let url = format!("https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/resolve/main/{f}");
+                self.download("voice", &url, &dest, "Whisper large-v3-turbo").await?;
+            }
+        }
+        // base: hızlı yedek; small: canlı sohbetin hızlı modeli (~1 sn).
         for size in ["base", "small"] {
             let wdir = models.join("whisper").join(size);
             for f in ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"] {

@@ -30,7 +30,9 @@ fn project_instructions(ws: &Path) -> Option<(String, String)> {
 }
 
 pub fn build(inp: &PromptInput) -> String {
-    let now = chrono::Local::now().format("%d.%m.%Y %H:%M (%A)");
+    // Yalnızca tarih: istem her turda aynı kalmalı ki llama-server önceki turların önbelleğini (KV) kullansın.
+    // Saat gerekirse model komutla öğrenebilir.
+    let now = chrono::Local::now().format("%d.%m.%Y (%A)");
     let os = match std::env::consts::OS {
         "windows" => "Windows",
         "macos" => "macOS",
@@ -107,6 +109,7 @@ Kullanıcı seninle canlı sesli konuşuyor; mesajı konuşmadan yazıya çevril
         }
         if let Some(mem) = &inp.core.memory {
             let prefs = mem.preferences(10);
+            // Arama, oturumun ilk mesajıyla yapılır (bkz. PromptInput::user_text): istem oturum boyunca sabit kalır.
             let related = mem.search(inp.user_text, 6);
             if !prefs.is_empty() || !related.is_empty() {
                 p.push_str("# Hafıza (önceki konuşmalardan)\n");

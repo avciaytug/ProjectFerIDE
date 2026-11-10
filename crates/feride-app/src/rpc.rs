@@ -282,6 +282,13 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
             json!({"session": sid})
         }
         "chat.stop" => json!(agent::stop(core, p_str(&p, "session")?)),
+        "chat.prewarm" => {
+            let c = Arc::clone(core);
+            let sid = p["session"].as_str().map(String::from);
+            let voice = p["voice"].as_bool().unwrap_or(false);
+            tokio::spawn(async move { agent::prewarm(&c, sid, voice).await });
+            json!(true)
+        }
         "chat.approve" => {
             let answer = match p_str(&p, "answer")? {
                 "allow" => ApprovalAnswer::Allow,
@@ -394,7 +401,11 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
             core.voice.warmup().await?;
             serde_json::to_value(core.voice.status())?
         }
-        "voice.transcribe" => json!(core.voice.transcribe(p_str(&p, "audio")?, p["mime"].as_str().unwrap_or("audio/webm")).await?),
+        "voice.transcribe" => {
+            let quality = p["quality"].as_str().map(String::from).unwrap_or_else(|| core.settings().voice.stt_quality);
+            let mime = p["mime"].as_str().unwrap_or("audio/webm");
+            json!(core.voice.transcribe(p_str(&p, "audio")?, mime, p["vad"].as_bool().unwrap_or(true), &quality).await?)
+        }
         "voice.speak" => {
             let s = core.settings();
             json!(core.voice.speak(p_str(&p, "text")?, &s.voice.voice, s.voice.speed).await?)

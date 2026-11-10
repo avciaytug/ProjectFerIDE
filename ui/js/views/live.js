@@ -66,7 +66,11 @@ export async function open() {
   }
   setSub('Ses motorları yükleniyor (ilk açılışta biraz sürebilir)…');
   try {
-    await S.rpc.call('voice.warmup');
+    const vs = await S.rpc.call('voice.warmup');
+    // Kadın sesi (Ahenk Cep) yüklenemediyse sunucu erkek sese düşer; bunu sessizce yapma.
+    if ((S.settings?.voice?.voice || 'female') === 'female' && vs?.voices && vs.voices.female === false) {
+      toast("Feride'nin kadın sesi kurulu değil; şimdilik erkek sesle konuşuyorum. Ayarlar > Ses > Güncelle ile kurabilirsin.", 'warn', 12000);
+    }
   } catch (e) {
     toast(`Ses sunucuları başlatılamadı: ${e.message}`, 'err', 10000);
     close();
@@ -74,6 +78,8 @@ export async function open() {
   }
   if (!L) return;
   setSub('');
+  // Sistem istemini ve geçmişi modele şimdiden işlet: ilk cümleye yanıt beklemeden gelsin.
+  if (!Chat.isRunning()) S.rpc.call('chat.prewarm', { session: Chat.currentId(), voice: true }).catch(() => {});
   if (Chat.isRunning()) { L.agentDone = false; setState('thinking'); } else setState('listening');
   tick();
 }
@@ -178,7 +184,7 @@ function onFrame(f) {
   // (hoparlör sesi mikrofona kaçabilir, bir öksürük görevi durdurmamalı).
   const guarded = (playing || L.state === 'thinking') && L.state !== 'approval';
   if (guarded && !L.bargeIn) return;
-  const thr = guarded ? Math.max(L.floor + 20, -34) : Math.max(L.floor + 11, -50);
+  const thr = guarded ? Math.max(L.floor + 20, -36) : Math.max(L.floor + 10, -58);
   if (!L.inSpeech) {
     if (db > thr) {
       L.loudMs += ms;
@@ -190,14 +196,18 @@ function onFrame(f) {
   }
   L.utt.push(f);
   L.uttMs += ms;
-  if (db > L.floor + 7) L.silenceMs = 0; else L.silenceMs += ms;
-  if (L.silenceMs >= 750 || L.uttMs >= 30000) endUtterance();
+  L.peakDb = Math.max(L.peakDb, db);
+  // Sessizlik: gürültü tabanına yakın ya da konuşmanın tepe düzeyinin çok altında.
+  const quiet = Math.max(L.floor + 6, Math.min(L.peakDb - 24, L.floor + 14));
+  if (db > quiet) L.silenceMs = 0; else L.silenceMs += ms;
+  if (L.silenceMs >= 800 || L.uttMs >= 30000) endUtterance();
 }
 
 function startUtterance() {
   L.inSpeech = true;
   L.utt = L.pre.slice();
   L.uttMs = L.preMs;
+  L.peakDb = -100;
   L.silenceMs = 0;
   L.loudMs = 0;
   if (L.state === 'approval') {
@@ -221,7 +231,8 @@ async function endUtterance() {
   const wav = encodeWav(frames, L.mic.rate);
   let text = '';
   try {
-    text = await S.rpc.call('voice.transcribe', { audio: bytesToB64(wav), mime: 'audio/wav' });
+    // Konuşma tarayıcıda zaten ayrıldı: sunucudaki ikinci VAD kapalı (kaydı bütünüyle atabiliyordu).
+    text = await S.rpc.call('voice.transcribe', { audio: bytesToB64(wav), mime: 'audio/wav', vad: false });
   } catch (e) {
     toast(`Konuşma tanıma: ${e.message}`, 'err', 8000);
   }

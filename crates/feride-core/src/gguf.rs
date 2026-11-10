@@ -123,7 +123,16 @@ impl<R: Read + Seek> Reader<R> {
         Ok(u64::from_le_bytes(b))
     }
     fn skip(&mut self, n: u64) -> std::io::Result<()> {
-        self.r.seek(SeekFrom::Current(n as i64))?;
+        // `BufReader::seek` her çağrıda tamponu atıp diskten yeniden doldurur. Tokenizer dizilerinde yüz
+        // binlerce kısa atlama var (Gemma: ~262 bin kelime): seek ile 40 sn, tampondan okuyarak <1 sn.
+        if n <= 1 << 16 {
+            let copied = std::io::copy(&mut (&mut self.r).take(n), &mut std::io::sink())?;
+            if copied < n {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+            }
+        } else {
+            self.r.seek(SeekFrom::Current(n as i64))?;
+        }
         Ok(())
     }
     fn pos(&mut self) -> std::io::Result<u64> {

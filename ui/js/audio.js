@@ -29,7 +29,14 @@ export class Mic {
       this.node = this.ctx.createScriptProcessor(1024, 1, 1);
       this.node.onaudioprocess = (e) => onFrame(new Float32Array(e.inputBuffer.getChannelData(0)));
     }
-    src.connect(this.node);
+    // 80 Hz yüksek geçiren süzgeç: bazı dahili mikrofonların (ör. AMD SoundWire) eklediği DC kaymasını
+    // ve uğultuyu siler. Aksi halde ses düzeyi hiç düşmez, konuşmanın bittiği algılanamaz ve Whisper bozulur.
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 80;
+    hp.Q.value = 0.707;
+    src.connect(hp);
+    hp.connect(this.node);
     this.node.connect(sink);
     if (this.ctx.state === 'suspended') await this.ctx.resume();
   }
@@ -56,13 +63,21 @@ export function levelDb(frame) {
   return rms > 0 ? 20 * Math.log10(rms) : -100;
 }
 
-/** Float32 parçaları 16 kHz mono 16-bit WAV'a çevirir. */
+/** Float32 parçaları 16 kHz mono 16-bit WAV'a çevirir; kısık kayıtları duyulur düzeye getirir. */
 export function encodeWav(chunks, srcRate, dstRate = 16000) {
   let total = 0;
   for (const c of chunks) total += c.length;
   const src = new Float32Array(total);
   let off = 0;
   for (const c of chunks) { src.set(c, off); off += c.length; }
+  // Kalan DC'yi çıkar ve tepe düzeyini ~-3 dBFS'e getir (en fazla 30 kat; gürültüyü aşırı büyütmemek için).
+  let mean = 0;
+  for (let i = 0; i < src.length; i++) mean += src[i];
+  mean /= Math.max(1, src.length);
+  let peak = 0;
+  for (let i = 0; i < src.length; i++) { src[i] -= mean; const a = Math.abs(src[i]); if (a > peak) peak = a; }
+  const gain = peak > 1e-4 ? Math.min(30, 0.7 / peak) : 1;
+  if (gain > 1.05 || gain < 0.95) for (let i = 0; i < src.length; i++) src[i] *= gain;
   // Kutu filtresiyle yeniden örnekleme (örtüşmeyi azaltır; konuşma için yeterli).
   const ratio = srcRate / dstRate;
   const outLen = Math.floor(src.length / ratio);

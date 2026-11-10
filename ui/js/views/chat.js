@@ -687,7 +687,8 @@ async function toggleMic(btn) {
     toast('Konuşma yazıya çevriliyor…', '', 2000);
     try {
       // 16 kHz mono WAV: STT sunucusu ffmpeg olmadan da çözer.
-      const text = await S.rpc.call('voice.transcribe', { audio: bytesToB64(encodeWav(frames, rate)), mime: 'audio/wav' });
+      // Sesle yazmada beklemek sorun değil: en doğru model.
+      const text = await S.rpc.call('voice.transcribe', { audio: bytesToB64(encodeWav(frames, rate)), mime: 'audio/wav', quality: 'accurate' });
       if (text) input.value += (input.value && !input.value.endsWith(' ') ? ' ' : '') + text;
       autosize();
       input.focus();

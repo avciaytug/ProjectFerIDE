@@ -1,5 +1,30 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.3) — Daha iyi Türkçe anlama, Feride'nin sesi, hızlı model başlatma
+
+### Konuşma tanıma
+- **Mikrofon sinyali düzeltildi:** bazı dahili mikrofonlar (ör. AMD SoundWire) sinyale DC kayması ekliyordu; konuşmanın
+  bittiği algılanamıyor (30 sn'lik kayıtlar), Whisper'ın VAD'ı da kaydı bütünüyle atıyordu. Artık 80 Hz yüksek geçiren
+  süzgeç, ses düzeyi normalleştirme ve konuşmanın tepe düzeyine göre ayarlanan sessizlik algılama var; canlı sohbette
+  kayıt zaten arayüzde ayrıldığı için sunucudaki ikinci VAD kapalı.
+- **Whisper large-v3-turbo** eklendi (Türkçede çok daha doğru). "Otomatik" kip: önce hızlı model (small, ~1 sn);
+  sonuçtan emin değilse turbo ile yeniden çevirir (~3 sn). Sesle yazma doğrudan turbo kullanır.
+  Ayarlar > Ses > Konuşma tanıma'dan Hızlı / En doğru seçilebilir.
+- STT sunucusu girişin süresini, düzeyini ve DC kaymasını günlüğe yazar (`logs/stt_server.log`).
+
+### Ses
+- **Feride'nin kadın sesi (Ahenk Cep) varsayılan olarak çalışıyor.** Gerekli paketler (`ema-lightning`, `trnorm`)
+  ses paketine eklendi; v5.3.8'den beri eksik oldukları için ses sessizce erkek sese düşüyordu. Kadın sesi yüklenemezse
+  canlı sohbet bunu açıkça söyler. Eski ses paketlerinde Ayarlar > Ses'te **Güncelle** düğmesi çıkar.
+
+### Hız
+- **Model başlatma 40 sn hızlandı:** GGUF başlığı okunurken her tokenizer kelimesi için 1 MB'lık tampon yeniden
+  dolduruluyordu (Gemma 4'te 40 sn). Plan artık 0,1–0,5 sn.
+- **Sohbet turları önbellekten devam ediyor:** sistem istemi her turda değiştiği için (saat, hafıza araması, araç sırası)
+  model ~8K tokenı her mesajda baştan işliyordu. İstem artık oturum boyunca sabit; sesli sohbette ikinci turdan itibaren
+  yanıt ~3 sn'de başlıyor (önce ~15 sn).
+- **Ön ısıtma:** canlı sohbet açılınca model yüklenir ve sistem istemi önceden işlenir; ilk cümleye yanıt beklemeden gelir.
+
 ## beta v5.4 (5.4.0-beta.2) — Canlı sesli sohbet
 
 ### Yeni

@@ -185,8 +185,11 @@ impl McpManager {
             .collect()
     }
 
+    /// Ada göre sıralı: araç listesi her istekte aynı olmalı, yoksa modelin istem önbelleği boşa gider.
     pub fn tools(&self) -> Vec<McpTool> {
-        self.servers.lock().unwrap().values().flat_map(|e| e.tools.clone()).collect()
+        let mut v: Vec<McpTool> = self.servers.lock().unwrap().values().flat_map(|e| e.tools.clone()).collect();
+        v.sort_by(|a, b| a.full_name.cmp(&b.full_name));
+        v
     }
 
     /// Etkin tüm sunucuları arka planda başlatır.
