@@ -75,24 +75,7 @@ export function renderTopbar() {
   ws.append(icon('folder'), h('span', { class: 'nowrap' }, basename(S.info?.workspace || '') || 'Klasör seç'));
   ws.onclick = () => Explorer.pickWorkspace();
 
-  const mc = document.getElementById('model-chip');
-  mc.innerHTML = '';
-  const st = S.model?.state || 'idle';
-  const dot = { ready: 'ok', starting: 'warn', stopping: 'warn', failed: 'err' }[st] || '';
-  let label;
-  if (S.settings?.provider?.kind === 'openai') label = `Uzak: ${S.settings.provider.model || 'model'}`;
-  else if (st === 'idle') label = S.settings?.model?.selected ? `${basename(S.settings.model.selected).replace(/\.gguf$/i, '')} (durdu)` : 'Model seçilmedi';
-  else label = S.model.model_name || 'model';
-  mc.append(h('span', { class: `dot ${dot}` }), h('span', { class: 'nowrap' }, label));
-  if (st === 'starting') mc.append(h('span', { class: 'muted small' }, 'yükleniyor…'));
-  mc.onclick = () => Models.open();
-
-  const ms = document.getElementById('mode-select');
-  ms.value = S.settings?.agent?.permission_mode || 'auto_edit';
-  ms.onchange = async () => {
-    await saveSettings({ agent: { permission_mode: ms.value } });
-    toast(`İzin modu: ${ms.options[ms.selectedIndex].text}`);
-  };
+  // Model seçici ve izin modu mesaj kutusunun altında (chat.js > renderFoot).
   const tb = document.getElementById('theme-btn');
   tb.innerHTML = '';
   tb.append(icon(S.settings?.theme === 'light' ? 'moon' : 'sun'));

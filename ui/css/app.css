@@ -328,6 +328,10 @@ body.focus-chat .todos { margin-left: max(12px, calc(50% - 460px)); margin-right
 .pill.on .sw { background: var(--accent); border-color: var(--accent); }
 .pill.on .sw::after { transform: translateX(10px); background: #fff; }
 .model-pick { flex: 0 1 auto; min-width: 0; }
+select.pill { appearance: auto; padding: 0 6px 0 10px; outline: none; }
+select.pill:focus { box-shadow: 0 0 0 3px var(--accent-bg); }
+.mode-pick.mode-full_auto { color: var(--warn); border-color: rgba(251, 191, 36, .45); }
+.mode-pick.mode-plan { color: var(--info); border-color: rgba(96, 165, 250, .45); }
 .model-pick .name { max-width: 240px; }
 .foot-stats { display: inline-flex; align-items: center; gap: 8px; color: var(--fg-3); font: 11px var(--mono); white-space: nowrap; overflow: hidden; cursor: default; }
 .ctxbar { display: inline-block; width: 36px; height: 4px; border-radius: 99px; background: var(--bg-4); overflow: hidden; }

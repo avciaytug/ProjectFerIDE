@@ -175,11 +175,11 @@ async function voice(body) {
       !st.installed ? h('span', { class: 'badge warn' }, 'Ses paketi kurulu değil') : st.update_needed ? h('span', { class: 'badge warn' }, 'Güncelleme var') : h('span', { class: 'badge ok' }, 'Ses paketi kurulu')),
     !st.installed || st.update_needed ? h('div', { class: 'row', style: { marginBottom: '8px' } },
       h('span', { class: 'small muted grow' }, st.update_needed
-        ? 'Ses paketinin yeni sürümü: Feride\'nin kadın sesi (Ahenk Cep) ve Türkçede çok daha doğru konuşma tanıma (Whisper large-v3-turbo). Kurulu parçalar yeniden indirilmez.'
-        : 'Konuşmayı yazıya çevirme (Whisper), Türkçe sesli yanıt ve canlı sesli sohbet için ses paketini kurun (~3,5 GB, tamamen yerel).'),
+        ? 'Ses paketinin yeni sürümü: Feride\'nin kadın sesi (Ahenk Cep) ve ekran kartında çalışan, Türkçede çok daha doğru konuşma tanıma (Whisper large-v3-turbo). Kurulu parçalar yeniden indirilmez.'
+        : 'Konuşmayı yazıya çevirme (Whisper), Türkçe sesli yanıt ve canlı sesli sohbet için ses paketini kurun (~4,4 GB, tamamen yerel).'),
       h('button', { class: 'btn primary sm', onclick: async () => { await S.rpc.call('setup.install', { ids: ['voice'] }); toast('Ses paketi kuruluyor; ilerlemeyi Kurulum sayfasında görebilirsiniz.'); import('./setup.js').then((m) => m.open()); } }, icon('download'), st.update_needed ? 'Güncelle' : 'Kur')) : null,
     field('Ses', null, select(v.voice, [['female', 'Feride — Ahenk Cep (kadın)'], ['male', 'Fahrettin — Piper (erkek)']], (x) => saveSettings({ voice: { voice: x } }))),
-    field('Konuşma tanıma', 'Canlı sohbette', select(v.stt_quality || 'auto', [['auto', 'Otomatik — hızlı, emin değilse en doğru model'], ['fast', 'Hızlı (Whisper small, ~1 sn)'], ['accurate', 'En doğru (Whisper large-v3-turbo, ~3 sn)']], (x) => saveSettings({ voice: { stt_quality: x } }))),
+    field('Konuşma tanıma', 'Canlı sohbette', select(v.stt_quality === 'fast' ? 'fast' : 'auto', [['auto', 'En doğru — Whisper large-v3-turbo (önerilen)'], ['fast', 'Hızlı — Whisper small (~1 sn, Türkçede daha çok hata)']], (x) => saveSettings({ voice: { stt_quality: x } }))),
     field('Konuşma hızı', null, select(v.speed, [[0.8, 'Yavaş'], [1.0, 'Normal'], [1.15, 'Hızlı'], [1.3, 'Çok hızlı']], (x) => saveSettings({ voice: { speed: Number(x) } }))),
     field('Yanıtları sesli oku', 'Ajan her görev sonunda yanıtını okur', check(v.auto_speak, (x) => saveSettings({ voice: { auto_speak: x } }), 'Etkin')),
     field('Dene', null, h('button', { class: 'btn sm', disabled: !st.installed, onclick: () => import('./chat.js').then((c) => c.speak('Merhaba, ben Feride. Sesim düzgün geliyor mu?')) }, icon('volume'), 'Örnek cümle'))));

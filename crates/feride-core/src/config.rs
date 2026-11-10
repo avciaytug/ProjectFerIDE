@@ -147,7 +147,7 @@ pub struct VoiceSettings {
     pub voice: String,
     pub speed: f32,
     pub auto_speak: bool,
-    /// Konuşma tanıma: auto (hızlı model, emin değilse doğru model) | fast (small) | accurate (large-v3-turbo)
+    /// Konuşma tanıma: auto (= en doğru model, large-v3-turbo) | fast (small) | hybrid (small, emin değilse turbo)
     pub stt_quality: String,
 }
 

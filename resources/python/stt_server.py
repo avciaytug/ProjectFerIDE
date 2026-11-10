@@ -337,14 +337,17 @@ def transcribe_audio_bytes(audio_bytes: bytes, lang: str = "tr", vad: bool = Tru
 
     import time as _t
     t0 = _t.time()
-    if quality == "accurate" and accurate is not None:
+    # "auto" (varsayılan) ve "accurate": en doğru model. Gerçek konuşmada small, sentetik testlerde iyi görünse
+    # de Türkçede belirgin hata yapıyor ("beni duyabiliyor musun" → "benim diyebiliyor musun").
+    # "hybrid": önce small, emin değilse turbo (eski "auto").
+    if quality in ("auto", "accurate") and accurate is not None:
         text, lp = _faster(accurate, audio_f32, lang, vad)
         used = "turbo"
     else:
         text, lp = _faster(fast, audio_f32, lang, vad)
         used = "hızlı"
         # Belirsiz ya da boş sonuç: doğru modelle bir kez daha dene.
-        if quality == "auto" and accurate is not None and accurate is not fast and (lp < AUTO_LOGPROB or not _clean(text)):
+        if quality == "hybrid" and accurate is not None and accurate is not fast and (lp < AUTO_LOGPROB or not _clean(text)):
             log.info("Hızlı model emin değil (logprob=%.3f): %r — turbo ile yeniden çevriliyor", lp, text)
             text, lp = _faster(accurate, audio_f32, lang, vad)
             used = "hızlı→turbo"

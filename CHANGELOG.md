@@ -1,5 +1,25 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.4) — Ekran kartında konuşma tanıma
+
+### Konuşma tanıma
+- **Varsayılan artık en doğru model (Whisper large-v3-turbo).** Gerçek konuşmada small modeli, güveni yüksek
+  görünse de Türkçede hata yapıyordu ("beni duyabiliyor musun" → "benim diyebiliyor musun"). Eski "otomatik"
+  ayarı kendiliğinden en doğru modele geçer; hızlı model Ayarlar > Ses'ten seçilebilir.
+- **GPU'da konuşma tanıma:** whisper.cpp, FerIDE'nin kendi CI'ında Vulkan (Windows, Linux) ve Metal (macOS) desteğiyle
+  derlenir; ses paketi bunu ve ggml turbo modelini SHA-256 doğrulamasıyla kurar. Ekran kartı varsa tanıma orada
+  yapılır; yoksa ya da hata olursa işlemcideki faster-whisper'a düşülür. Hangi motorun kullanıldığı
+  `logs/feride.log`'a, whisper.cpp çıktısı `logs/whisper_server.log`'a yazılır.
+- Ses paketi sürümü 3: eski kurulumlarda Ayarlar > Ses'te **Güncelle** çıkar (kurulu parçalar yeniden inmez).
+
+### Arayüz
+- Üst çubuktaki model göstergesi kaldırıldı (model seçici mesaj kutusunun altında).
+- İzin modu (Plan / Sor / Düzenlemelere izin ver / Tam otonom) mesaj kutusunun altına taşındı.
+
+### Gizlilik
+- Konuşma tanıma, ses ve modeller çalışırken internete çıkmaz; her şey bu bilgisayarda çalışır. İnternet yalnızca
+  kurulumda, model indirirken ve ajanın web araması / sayfa okuma araçlarında kullanılır.
+
 ## beta v5.4 (5.4.0-beta.3) — Daha iyi Türkçe anlama, Feride'nin sesi, hızlı model başlatma
 
 ### Konuşma tanıma

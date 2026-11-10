@@ -135,7 +135,20 @@ function renderFoot() {
     h('span', { class: `dot ${dot}` }), h('span', { class: 'nowrap name' }, name),
     st === 'starting' && !remote ? h('span', { class: 'muted' }, 'yükleniyor…') : null, icon('chevD'));
 
-  footEl.append(think, picker, h('span', { class: 'spacer' }));
+  const MODES = [['plan', 'Plan (salt okunur)'], ['ask', 'Her işlemde sor'], ['auto_edit', 'Düzenlemelere izin ver'], ['full_auto', 'Tam otonom']];
+  const curMode = S.settings?.agent?.permission_mode || 'auto_edit';
+  const mode = h('select', {
+    class: `pill mode-pick mode-${curMode}`,
+    title: 'İzin modu: ajanın neleri sormadan yapabileceği. Görev sürerken de değiştirilebilir.',
+    onchange: async (e) => {
+      const v = e.target.value;
+      await saveSettings({ agent: { permission_mode: v } }).catch(() => {});
+      toast(`İzin modu: ${MODES.find((m) => m[0] === v)?.[1] || v}`);
+      renderFoot();
+    },
+  }, MODES.map(([v, l]) => h('option', { value: v, selected: v === curMode }, l)));
+
+  footEl.append(think, picker, mode, h('span', { class: 'spacer' }));
   const u = lastUsage;
   if (u) {
     const pct = u.ctx && u.input ? Math.min(100, Math.round((u.input / u.ctx) * 100)) : null;

@@ -16,7 +16,12 @@ use crate::events::EventBus;
 use crate::paths::Paths;
 
 /// Ses paketi sürümü (işaret dosyasına yazılır). Yeni model ya da bağımlılık eklenince artırılır.
-pub const VOICE_PACK: &str = "voice-pack-2";
+pub const VOICE_PACK: &str = "voice-pack-3";
+
+/// GPU konuşma tanıma: whisper.cpp sunucusu FerIDE'nin kendi CI'ında (Vulkan/Metal) derlenip bu ön sürüme yüklenir.
+const WHISPER_GPU_RELEASE: &str = "https://github.com/avciaytug/ProjectFerIDE/releases/download/deps-whisper-v1.9.5";
+/// ggerganov/whisper.cpp deposundaki ggml-large-v3-turbo-q8_0.bin dosyasının SHA-256 özeti (LFS).
+const GGML_STT_SHA256: &str = "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DepStatus {
@@ -287,9 +292,9 @@ impl Deps {
             version: None,
             path: None,
             needs_admin: false,
-            size_hint: "3,5 GB".into(),
+            size_hint: "4,4 GB".into(),
             note: Some(if !voice_marker.is_empty() && !voice_ok {
-                "Güncelleme gerekli: Feride (kadın) sesi ve daha doğru Türkçe konuşma tanıma".into()
+                "Güncelleme gerekli: Feride (kadın) sesi ve ekran kartında doğru Türkçe konuşma tanıma".into()
             } else {
                 "uv gerektirir".into()
             }),
@@ -763,6 +768,10 @@ impl Deps {
                 self.download("voice", &url, &dest, "Whisper large-v3-turbo").await?;
             }
         }
+        // GPU motoru isteğe bağlıdır: kurulamazsa yalnızca uyarılır, konuşma tanıma işlemcide çalışır.
+        if let Err(e) = self.fetch_whisper_gpu().await {
+            tracing::warn!("GPU konuşma tanıma kurulamadı (işlemci kullanılacak): {e}");
+        }
         // base: hızlı yedek; small: canlı sohbetin hızlı modeli (~1 sn).
         for size in ["base", "small"] {
             let wdir = models.join("whisper").join(size);
@@ -772,6 +781,59 @@ impl Deps {
                     let url = format!("https://huggingface.co/Systran/faster-whisper-{size}/resolve/main/{f}");
                     self.download("voice", &url, &dest, &format!("Whisper {size}")).await?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// whisper.cpp GPU sunucusu (SHA-256 doğrulamalı) ve ggml Whisper large-v3-turbo modeli.
+    async fn fetch_whisper_gpu(&self) -> anyhow::Result<()> {
+        let asset = if cfg!(all(windows, target_arch = "x86_64")) {
+            "whisper-vulkan-windows-x64.zip"
+        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "whisper-vulkan-linux-x64.tar.gz"
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "whisper-metal-macos-arm64.tar.gz"
+        } else {
+            return Ok(());
+        };
+        let dest = self.paths.tools().join("whisper");
+        let exe = dest.join(if cfg!(windows) { "whisper-server.exe" } else { "whisper-server" });
+        if !exe.is_file() {
+            let file = self.paths.cache().join(asset);
+            self.download("voice", &format!("{WHISPER_GPU_RELEASE}/{asset}"), &file, "GPU konuşma tanıma (whisper.cpp)").await?;
+            let sums = self
+                .http
+                .get(format!("{WHISPER_GPU_RELEASE}/{asset}.sha256"))
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            let expected = sums.split_whitespace().next().unwrap_or_default().to_lowercase();
+            let f = file.clone();
+            let actual = tokio::task::spawn_blocking(move || sha256_file(&f)).await??;
+            if expected.len() != 64 || actual != expected {
+                let _ = tokio::fs::remove_file(&file).await;
+                anyhow::bail!("whisper.cpp paketi doğrulanamadı (SHA-256 uyuşmuyor)");
+            }
+            let (f, d) = (file.clone(), dest.clone());
+            tokio::task::spawn_blocking(move || extract_archive(&f, &d)).await??;
+            let _ = tokio::fs::remove_file(&file).await;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        let model = self.paths.voice().join("models").join("whisper-ggml").join(crate::voice::GGML_STT_MODEL);
+        if !model.is_file() {
+            let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", crate::voice::GGML_STT_MODEL);
+            self.download("voice", &url, &model, "Whisper large-v3-turbo (GPU)").await?;
+            let m = model.clone();
+            if tokio::task::spawn_blocking(move || sha256_file(&m)).await?? != GGML_STT_SHA256 {
+                let _ = tokio::fs::remove_file(&model).await;
+                anyhow::bail!("Whisper GPU modeli doğrulanamadı (SHA-256 uyuşmuyor)");
             }
         }
         Ok(())
