@@ -1,0 +1,7 @@
+# FerIDE ses paketi: Whisper (STT) + Piper / Ahenk Cep (TTS). Tamamen yerel çalışır.
+numpy>=1.26
+faster-whisper>=1.0.0
+piper-tts>=1.2.0
+onnxruntime>=1.18
+# Ahenk Cep (Feride sesi) PyTorch modeli için; CPU sürümü yeterli.
+torch>=2.3

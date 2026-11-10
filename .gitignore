@@ -1,0 +1,15 @@
+/target/
+**/*.rs.bk
+*.log
+*.tmp
+*.indiriliyor
+*.part
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+/.vscode/
+/.idea/
+# Kullanıcı verisi asla depoya girmez
+*.gguf
+secrets.bin

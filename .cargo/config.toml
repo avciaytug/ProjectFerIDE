@@ -1,0 +1,4 @@
+# Windows: C çalışma zamanını statik bağla; feride.exe, VC++ çalışma zamanı kurulu olmayan
+# bilgisayarda da açılır (ilk kurulum sihirbazı ondan sonra eksikleri tamamlar).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

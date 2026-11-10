@@ -1,0 +1,40 @@
+[package]
+name = "feride-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "FerIDE masaüstü uygulaması, yerel sunucu ve komut satırı"
+publish = false
+
+[[bin]]
+name = "feride"
+path = "src/main.rs"
+
+[features]
+default = ["desktop"]
+# Masaüstü penceresi (WebView). Başsız sunucu derlemesi için: --no-default-features
+desktop = ["dep:tao", "dep:wry", "dep:rfd"]
+
+[dependencies]
+feride-core = { path = "../feride-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures.workspace = true
+uuid.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+rust-embed = "8"
+mime_guess = "2"
+open = "5"
+base64 = "0.22"
+tao = { version = "0.34", optional = true }
+wry = { version = "0.53", optional = true }
+rfd = { version = "0.15", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
