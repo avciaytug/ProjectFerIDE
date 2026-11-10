@@ -28,7 +28,7 @@ Windows, Linux ve macOS'ta aynı davranış.
 İlk açılışta kurulum sihirbazı eksikleri tespit edip kullanıcı klasörünüze kurar
 (yönetici izni yalnızca gerekirse ve bir kez istenir).
 
-Depo herkese açıkken tek satırla da kurulabilir (gizli depoda Sürümler sayfasından indirin).
+Ya da tek satırla kurun (en son sürümü indirip kullanıcı klasörünüze kurar):
 
 Windows (PowerShell):
 
