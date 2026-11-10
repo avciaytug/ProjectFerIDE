@@ -1,0 +1,84 @@
+# whisper.cpp'yi GPU desteğiyle derler (Windows/Linux: Vulkan, macOS: Metal) ve "deps-whisper-<sürüm>"
+# ön sürümüne yükler. FerIDE, konuşma tanımayı ekran kartında çalıştırmak için bu paketleri indirir.
+# Kaynak: github.com/ggml-org/whisper.cpp (MIT), belirtilen etikete sabitlenir.
+name: whisper.cpp GPU
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "whisper.cpp etiketi"
+        required: true
+        default: "v1.9.5"
+
+permissions:
+  contents: write
+
+env:
+  WHISPER_VERSION: ${{ inputs.version }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: whisper-vulkan-windows-x64.zip
+          - os: ubuntu-24.04
+            asset: whisper-vulkan-linux-x64.tar.gz
+          - os: macos-latest
+            asset: whisper-metal-macos-arm64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_VERSION }}
+          path: whisper
+
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "$env:RUNNER_TEMP\vulkan_sdk.exe"
+          curl.exe -fsSL -o $exe "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe"
+          & $exe --root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install | Out-Host
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\Bin"
+
+      - name: Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y libvulkan-dev glslc spirv-headers
+
+      - name: Derle
+        shell: bash
+        run: |
+          GPU="-DGGML_VULKAN=ON"
+          if [ "$RUNNER_OS" = "macOS" ]; then GPU="-DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON"; fi
+          cmake -S whisper -B build $GPU -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_SERVER=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j 4 --target whisper-server
+
+      - name: Paketle
+        shell: bash
+        run: |
+          mkdir -p out
+          BIN=$(find build -type f \( -name 'whisper-server' -o -name 'whisper-server.exe' \) | head -1)
+          echo "ikili: $BIN"
+          cp "$BIN" out/
+          cp whisper/LICENSE out/LICENSE-whisper.cpp.txt
+          cd out
+          if [ "$RUNNER_OS" = "Windows" ]; then 7z a "../${{ matrix.asset }}" . >/dev/null; else tar -czf "../${{ matrix.asset }}" .; fi
+          cd ..
+          if command -v sha256sum >/dev/null; then sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"; else shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"; fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: deps-whisper-${{ env.WHISPER_VERSION }}
+          name: "Bağımlılık: whisper.cpp ${{ env.WHISPER_VERSION }} (GPU)"
+          body: "FerIDE'nin GPU'da konuşma tanıma için kullandığı whisper.cpp sunucusu (ggml-org/whisper.cpp ${{ env.WHISPER_VERSION }}, MIT). Windows/Linux: Vulkan, macOS: Metal."
+          prerelease: true
+          files: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
