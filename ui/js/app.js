@@ -2,7 +2,6 @@
 import { Rpc } from './rpc.js';
 import { h, icon, toast, basename, store } from './util.js';
 import * as Explorer from './views/explorer.js';
-import * as Search from './views/search.js';
 import * as Sessions from './views/sessions.js';
 import * as Editor from './views/editor.js';
 import * as Bottom from './views/bottom.js';
@@ -31,7 +30,6 @@ window.ferideOpenUrl = (url) => S.rpc.call('app.open_url', { url }).catch((e) =>
 // ---------------------------------------------------------------- yan paneller
 const SIDE = {
   explorer: { icon: 'files', title: 'Gezgin', mod: Explorer },
-  search: { icon: 'search', title: 'Ara', mod: Search },
   sessions: { icon: 'chat', title: 'Sohbetler', mod: Sessions },
 };
 const PAGES = [
@@ -39,7 +37,7 @@ const PAGES = [
   { id: 'settings', icon: 'settings', title: 'Ayarlar', open: () => Settings.open() },
   { id: 'setup', icon: 'wrench', title: 'Kurulum ve Tanılama', open: () => Setup.open() },
 ];
-let currentSide = store('side') || 'explorer';
+let currentSide = SIDE[store('side')] ? store('side') : 'explorer'; // kaldırılmış paneller (ör. eski "Ara") gezgine döner
 
 function renderActivityBar() {
   const bar = document.getElementById('activitybar');
@@ -202,7 +200,6 @@ function setupShortcuts() {
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); Editor.saveActive(); }
     else if (mod && e.key.toLowerCase() === 'j') { e.preventDefault(); toggleFocus(); }
     else if (mod && e.key === '`') { e.preventDefault(); Bottom.toggle(); }
-    else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); showSide('search'); }
     else if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); Chat.focusComposer(); }
     else if (mod && e.key.toLowerCase() === 'n' && e.shiftKey) { e.preventDefault(); Chat.newChat(); }
     else if (mod && e.key.toLowerCase() === 'v' && e.shiftKey) { e.preventDefault(); import('./views/live.js').then((l) => (l.isActive() ? l.close() : l.open())); }

@@ -209,7 +209,7 @@ export function showWelcome() {
         h('span', { class: 'k' }, 'Ctrl+J'), 'Sohbet odak modu',
         h('span', { class: 'k' }, 'Ctrl+`'), 'Terminali aç/kapat',
         h('span', { class: 'k' }, 'Ctrl+S'), 'Dosyayı kaydet',
-        h('span', { class: 'k' }, 'Ctrl+Shift+F'), 'Çalışma alanında ara',
-        h('span', { class: 'k' }, 'Ctrl+Shift+N'), 'Yeni sohbet')));
+        h('span', { class: 'k' }, 'Ctrl+Shift+N'), 'Yeni sohbet',
+        h('span', { class: 'k' }, 'Ctrl+Shift+V'), 'Canlı sesli sohbet')));
   areaEl.append(el);
 }

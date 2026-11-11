@@ -1,5 +1,11 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.7) — Sadeleştirme
+
+- Sol çubuktaki **Ara** paneli (büyüteç) ve `Ctrl+Shift+F` kısayolu kaldırıldı. Çalışma alanında arama gerektiğinde
+  Feride'den istemek yeterli (ajanın kendi arama araçları değişmedi); dosya içinde arama düzenleyicide `Ctrl+F` ile.
+- Karşılama sayfasındaki kısayollara canlı sesli sohbet (`Ctrl+Shift+V`) eklendi.
+
 ## beta v5.4 (5.4.0-beta.6) — Ses paketi yeni bilgisayarlarda kuruluyor
 
 - **Ses paketi kurulumu düzeltildi:** Piper'ın Türkçe "fahrettin" sesi 30.12.2025'te ses sahiplerinin isteğiyle Piper

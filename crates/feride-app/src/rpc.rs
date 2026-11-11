@@ -179,18 +179,6 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
             json!(true)
         }
         "fs.delete" => json!(fsops::trash(&p_path(&p, "path")?, &core.paths.trash())?),
-        "fs.search" => {
-            let root = match p["root"].as_str() {
-                Some(r) if !r.is_empty() => fsops::sanitize_ui_path(r)?,
-                _ => core.workspace(),
-            };
-            let q = p_str(&p, "query")?.to_string();
-            let regex = p["regex"].as_bool().unwrap_or(false);
-            let case = p["case"].as_bool().unwrap_or(false);
-            let include = p["include"].as_str().map(String::from);
-            let hits = tokio::task::spawn_blocking(move || fsops::search(&root, &q, regex, case, include.as_deref(), 1000)).await??;
-            serde_json::to_value(hits)?
-        }
         "fs.git_status" => {
             let root = match p["root"].as_str() {
                 Some(r) if !r.is_empty() => fsops::sanitize_ui_path(r)?,
