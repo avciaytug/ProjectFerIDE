@@ -97,6 +97,8 @@ fn write_instance(paths: &Paths, port: u16, token: &str) {
 }
 
 fn main() {
+    // Alt süreçlerde (llama-server, ses motorları) Windows hata pencereleri açılmasın; hata çıkış koduna dönüşür.
+    feride_core::winsec::suppress_error_dialogs();
     let cli = Cli::parse();
     if cli.cmd.is_some() {
         attach_console();
@@ -218,6 +220,18 @@ async fn doctor(paths: Paths) {
     println!("FerIDE {} ({})", feride_core::DISPLAY_VERSION, feride_core::VERSION);
     println!("Veri klasörü: {}", paths.data.display());
     println!("Kabuk: {}", feride_core::shell::Shell::detect(&paths, &s.agent.shell).display_name());
+    if let Some(sac) = feride_core::winsec::smart_app_control() {
+        let label = match sac {
+            0 => "kapalı",
+            1 => "AÇIK — imzasız bileşenler engellenir",
+            2 => "değerlendirme (engellemez)",
+            _ => "bilinmiyor",
+        };
+        println!("Akıllı Uygulama Denetimi: {label}");
+        if sac == 1 {
+            println!("  {}", feride_core::winsec::SAC_HELP);
+        }
+    }
     println!("\nBağımlılıklar:");
     for d in core.deps.check(&s) {
         println!(

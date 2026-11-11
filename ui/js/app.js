@@ -250,6 +250,21 @@ async function boot() {
 
   if (S.info.needs_setup) Setup.open(true);
   else Editor.showWelcome();
+  if (S.info.smart_app_control === 1) showSacNotice();
+}
+
+// Windows Akıllı Uygulama Denetimi imzasız llama.cpp'yi engelliyor: açılışta bir kez açıkla.
+async function showSacNotice() {
+  try {
+    const r = await S.rpc.call('setup.status');
+    const { modal } = await import('./util.js');
+    const m = modal({
+      title: 'Windows, FerIDE\'nin model motorunu engelliyor',
+      body: Setup.sacWarning(r.sac_help),
+      actions: [{ label: 'Tamam' }],
+    });
+    m.el.style.width = 'min(640px, 94vw)';
+  } catch { /* yoksay */ }
 }
 
 boot().catch((e) => {

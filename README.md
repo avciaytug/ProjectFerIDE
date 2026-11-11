@@ -71,6 +71,18 @@ Ya da [Sürümler](https://github.com/avciaytug/ProjectFerIDE/releases) sayfası
 - **Kaldırma:** kurulum klasörünü ve kısayolları silin. Modeller ve sohbetler `~/.feride` klasöründedir
   (Windows: `%USERPROFILE%\.feride`); onları da silmek isterseniz bu klasörü kaldırın.
 
+### Sorun giderme
+
+- **"llama-server.exe — Bozuk Görüntü … 0xc0e90002" hatası (Windows 11):** Windows'un *Akıllı Uygulama Denetimi*
+  (Smart App Control) açık ve dijital olarak imzalanmamış programları engelliyor; FerIDE'nin model motoru llama.cpp
+  henüz imzalı değil. **Windows Güvenlik → Uygulama ve tarayıcı denetimi → Akıllı Uygulama Denetimi ayarları →
+  Kapalı** yapın ve FerIDE'yi yeniden başlatın. FerIDE bu durumu kendisi de algılayıp açıklar. Windows'un Nisan 2026
+  ve sonraki güncellemelerinde bu ayar sonradan yeniden açılabilir.
+- **Windows'ta Linux komutunu (`curl … | bash`) çalıştırdıysanız:** betik Windows'u algılayıp Windows kurulumuna
+  geçer; yine de Windows'ta PowerShell komutunu kullanın.
+- **Tanı:** `feride doctor` bağımlılıkları, donanımı, modelleri ve Akıllı Uygulama Denetimi durumunu gösterir.
+  Günlükler: `~/.feride/logs/`.
+
 ### Gizlilik
 
 Modeller, konuşma tanıma ve ses tamamen bu bilgisayarda çalışır; sohbetleriniz hiçbir sunucuya gönderilmez.

@@ -7,6 +7,22 @@ set -euo pipefail
 
 REPO="avciaytug/ProjectFerIDE"
 OS="$(uname -s)"
+PS_INSTALL="irm https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 | iex"
+
+# Windows'ta (Git Bash / MSYS / Cygwin) çalıştırıldıysa Windows kurulumuna geç.
+case "$OS" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "Windows algılandı; FerIDE'nin Windows sürümü kuruluyor…"
+    exec powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$PS_INSTALL" ;;
+esac
+# PowerShell'den "| bash" ile çağrılınca bash çoğu zaman WSL'dir: Linux sürümünü WSL'nin içine kurmak yerine
+# Windows sürümünü kur. WSL içinde Linux sürümü isteniyorsa: FERIDE_WSL_LINUX=1
+if [ "$OS" = Linux ] && grep -qi microsoft /proc/version 2>/dev/null && [ "${FERIDE_WSL_LINUX:-}" != 1 ] \
+  && command -v powershell.exe >/dev/null 2>&1; then
+  echo "WSL algılandı; FerIDE'nin Windows sürümü kuruluyor (WSL içine Linux sürümü için: FERIDE_WSL_LINUX=1)…"
+  exec powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$PS_INSTALL"
+fi
+
 ARCH="$(uname -m)"
 case "$ARCH" in x86_64|amd64) ARCH=x64 ;; arm64|aarch64) ARCH=arm64 ;; *) echo "Desteklenmeyen mimari: $ARCH"; exit 1 ;; esac
 case "$OS" in

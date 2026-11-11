@@ -24,6 +24,7 @@ pub mod skills;
 pub mod terminal;
 pub mod util;
 pub mod voice;
+pub mod winsec;
 
 pub use crate::core::Core;
 

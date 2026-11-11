@@ -434,6 +434,8 @@ mark { background: rgba(139, 123, 255, .28); color: inherit; border-radius: 3px;
 .dep .ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; background: var(--bg-4); }
 .dep.ok .ic { color: var(--ok); background: rgba(52, 211, 153, .1); }
 .dep.miss .ic { color: var(--warn); background: rgba(251, 191, 36, .1); }
+.sac-warn { border: 1px solid rgba(251, 191, 36, .5); background: rgba(251, 191, 36, .08); border-radius: 10px; padding: 12px 14px; margin-top: 14px; }
+.sac-warn > .row > svg.i { color: var(--warn); width: 20px; height: 20px; margin-top: 1px; }
 .hero-setup { text-align: center; padding: 36px 0 8px; }
 .hero-setup .logo { width: 64px; height: 64px; border-radius: 18px; margin: 0 auto 14px; display: grid; place-items: center; font-size: 30px; font-weight: 800; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 10px 40px rgba(139, 123, 255, .35); }
 

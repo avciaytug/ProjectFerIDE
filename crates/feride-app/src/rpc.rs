@@ -43,6 +43,7 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
                 "needs_setup": needs_setup,
                 "desktop": st.desktop,
                 "memory_count": core.memory.as_ref().map(|m| m.count()).unwrap_or(0),
+                "smart_app_control": feride_core::winsec::smart_app_control(),
             })
         }
         "app.quit" => {
@@ -65,6 +66,10 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
                 other => fsops::sanitize_ui_path(other)?,
             };
             open::that_detached(&target)?;
+            json!(true)
+        }
+        "app.open_security" => {
+            feride_core::winsec::open_security_settings()?;
             json!(true)
         }
         "app.open_url" => {
@@ -95,7 +100,12 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
         // ------------------------------------------------------------ kurulum
         "setup.status" => {
             let s = core.settings();
-            json!({"deps": core.deps.check(&s), "state": core.deps.state()})
+            json!({
+                "deps": core.deps.check(&s),
+                "state": core.deps.state(),
+                "smart_app_control": feride_core::winsec::smart_app_control(),
+                "sac_help": feride_core::winsec::SAC_HELP,
+            })
         }
         "setup.install" => {
             let ids: Vec<String> = serde_json::from_value(p["ids"].clone()).unwrap_or_default();

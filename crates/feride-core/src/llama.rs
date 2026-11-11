@@ -151,6 +151,11 @@ pub fn find_mmproj(model: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
 
 /// Başarısız başlatmanın nedenini günlükten Türkçe açıklar.
 pub fn explain_failure(log: &str, exit_code: Option<i32>) -> String {
+    // Komut satırından sonraki llama-server çıktısı (ilk satır FerIDE'nin yazdığı komuttur).
+    let output: String = log.lines().skip(1).collect::<Vec<_>>().join("\n");
+    if crate::winsec::likely_blocked(exit_code, &output) {
+        return crate::winsec::SAC_HELP.into();
+    }
     let l = log.to_lowercase();
     if let Some(code) = exit_code {
         match code as u32 {
@@ -370,6 +375,13 @@ impl LlamaManager {
                 anyhow::bail!(msg);
             }
         };
+        // Windows Akıllı Uygulama Denetimi llama.cpp'yi bu oturumda zaten engelledi: yeniden deneyip yeni bir
+        // hata penceresi açtırma, nedenini söyle.
+        if crate::winsec::engine_blocked() {
+            let msg = crate::winsec::SAC_HELP.to_string();
+            self.fail(&req.model, &name, &msg, vec![]);
+            anyhow::bail!(msg);
+        }
         let (plan, _info, _hw) = match self.preview_plan(settings, &req).await {
             Ok(x) => x,
             Err(e) => {
@@ -472,7 +484,9 @@ impl LlamaManager {
         let ready = loop {
             if let Ok(Some(status)) = child.try_wait() {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                let msg = explain_failure(&self.logs().join("\n"), status.code());
+                let logs = self.logs().join("\n");
+                crate::winsec::note_engine_result(status.code(), &logs.lines().skip(1).collect::<Vec<_>>().join("\n"));
+                let msg = explain_failure(&logs, status.code());
                 self.fail(&req.model, &name, &msg, plan.warnings.clone());
                 self.inner.lock().unwrap().kill = None;
                 anyhow::bail!(msg);

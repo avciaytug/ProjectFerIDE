@@ -75,6 +75,17 @@ if ($env:FERIDE_NO_SHORTCUTS -ne '1') {
 }
 
 Write-Host "FerIDE $($release.tag_name) kuruldu: $Dest" -ForegroundColor Green
+
+# Windows 11 Akıllı Uygulama Denetimi açıksa imzasız llama.cpp "Bozuk Görüntü (0xc0e90002)" hatasıyla engellenir.
+$sac = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name VerifiedAndReputablePolicyState -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
+if ($sac -eq 1) {
+    Write-Host ""
+    Write-Host "UYARI: Windows Akıllı Uygulama Denetimi (Smart App Control) açık." -ForegroundColor Yellow
+    Write-Host "FerIDE'nin model motoru llama.cpp henüz dijital olarak imzalı olmadığı için Windows onu engeller" -ForegroundColor Yellow
+    Write-Host '("Bozuk Görüntü 0xc0e90002" hatası). Çözüm:' -ForegroundColor Yellow
+    Write-Host "  Windows Güvenlik > Uygulama ve tarayıcı denetimi > Akıllı Uygulama Denetimi ayarları > Kapalı" -ForegroundColor Yellow
+    Write-Host "  ardından FerIDE'yi yeniden başlatın. (Windows'un Nisan 2026 ve sonraki güncellemelerinde ayar sonradan yeniden açılabilir.)" -ForegroundColor Yellow
+}
 if ($env:FERIDE_NO_LAUNCH -ne '1') {
     Write-Host "Açılıyor... İlk açılışta kurulum sihirbazı eksikleri kendisi kurar."
     Start-Process $exe

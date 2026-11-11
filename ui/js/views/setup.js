@@ -37,10 +37,25 @@ async function load() {
     const r = await S.rpc.call('setup.status');
     deps = r.deps;
     state = r.state;
+    sac = r.smart_app_control === 1 ? r.sac_help : null;
     if (!selected.size) for (const d of deps) if (!d.installed && (d.required || ['git', 'uv', 'node', 'pydocs', 'longpaths'].includes(d.id))) selected.add(d.id);
   } catch (e) { toast(e.message, 'err'); }
   render();
   if (!hw) S.rpc.call('app.hardware', { fresh: true }).then((x) => { hw = x; render(); }).catch(() => {});
+}
+
+let sac = null;
+
+/** Windows Akıllı Uygulama Denetimi açıkken gösterilen uyarı (imzasız llama.cpp engellenir). */
+export function sacWarning(text) {
+  return h('div', { class: 'sac-warn' },
+    h('div', { class: 'row', style: { alignItems: 'flex-start' } }, icon('shield'),
+      h('div', { class: 'grow' },
+        h('b', {}, 'Windows Akıllı Uygulama Denetimi açık'),
+        h('div', { class: 'small', style: { marginTop: '4px' } }, text),
+        h('div', { class: 'row', style: { marginTop: '8px' } },
+          h('button', { class: 'btn primary sm', onclick: () => S.rpc.call('app.open_security').catch((e) => toast(e.message, 'err')) }, icon('external'), 'Windows Güvenlik\'i aç'),
+          h('span', { class: 'tiny muted' }, 'Uygulama ve tarayıcı denetimi → Akıllı Uygulama Denetimi ayarları → Kapalı, sonra FerIDE\'yi yeniden başlatın.')))));
 }
 
 function render() {
@@ -56,6 +71,7 @@ function render() {
   } else {
     inner.append(h('h2', {}, 'Kurulum ve tanılama'), h('div', { class: 'muted' }, 'Bağımlılıkların durumu. Eksikleri seçip tek tıkla kurabilirsiniz.'));
   }
+  if (sac) inner.append(sacWarning(sac));
   const sec = h('div', { class: 'section' });
   for (const d of deps) {
     const p = progress.get(d.id);

@@ -1,5 +1,25 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.5) — Windows Akıllı Uygulama Denetimi uyumu, kurulum düzeltmeleri
+
+### Windows
+- **Akıllı Uygulama Denetimi (Smart App Control) tanınıyor.** Yeni Windows 11 kurulumlarında açık gelen bu özellik
+  dijital olarak imzalanmamış programları engeller; llama.cpp "Bozuk Görüntü (0xc0e90002)" hatasıyla açılamıyordu ve
+  FerIDE her denemede yeni bir hata penceresi açtırıyordu. Artık:
+  - Denetim açıksa FerIDE açılışta, kurulum sihirbazında, model başlatma hatasında ve `feride doctor`'da nedenini ve
+    çözümünü açıklar; **Windows Güvenlik'i aç** düğmesi doğrudan ilgili sayfaya götürür.
+  - llama.cpp bir kez engellenince o oturumda yeniden çalıştırılmaz (pencere yağmuru biter); donanım ölçümü ve
+    bayrak tespiti de onu çağırmaz.
+  - Alt süreçlerde Windows hata pencereleri kapatılır; hata çıkış koduna dönüşür ve açıklanır.
+  - Ses sunucuları engellenip hemen kapanırsa 60 sn beklenmez.
+- Kurulum betiği, denetim açıksa kurulumdan sonra uyarır.
+
+### Kurulum
+- **Windows tek komutlu kurulumu düzeltildi:** SHA-256 özet dosyası yanlış okunduğu için kurulum herkeste
+  "İndirme doğrulanamadı" hatasıyla duruyordu.
+- `install.sh` Windows'ta (Git Bash, ya da PowerShell'den `| bash` ile WSL) çalıştırılırsa Windows kurulumuna geçer.
+- Sürüm sayfalarında kurulum talimatı ve değişiklik notları.
+
 ## beta v5.4 (5.4.0-beta.4) — Ekran kartında konuşma tanıma
 
 ### Konuşma tanıma

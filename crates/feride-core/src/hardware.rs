@@ -112,10 +112,16 @@ pub fn ram_and_cpu() -> (u64, u64, usize, String) {
 /// `-ngl all` değerinin kabul edildiğini belirtir.
 pub async fn llama_flags(paths: &Paths, server: &Path) -> BTreeSet<String> {
     static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|[^\w-])(--[a-z0-9][a-z0-9-]*)").unwrap());
+    if crate::winsec::engine_blocked() {
+        return BTreeSet::new();
+    }
     let mut cmd = crate::proc::command(paths, &server.to_string_lossy(), &["--help".to_string()]);
-    let Ok((_, out, err, _)) = crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(20)).await else {
+    let Ok((code, out, err, _)) = crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(20)).await else {
         return BTreeSet::new();
     };
+    if code != Some(0) && crate::winsec::note_engine_result(code, &format!("{out}{err}")) {
+        return BTreeSet::new();
+    }
     let help = format!("{out}\n{err}");
     let mut flags: BTreeSet<String> = RE.captures_iter(&help).map(|c| c[1].to_string()).collect();
     if help.contains("'all'") {
@@ -131,10 +137,14 @@ pub async fn llama_flags(paths: &Paths, server: &Path) -> BTreeSet<String> {
 pub async fn probe(paths: &Paths, server: Option<&Path>) -> HardwareInfo {
     let (total, avail, cores, cpu_name) = tokio::task::spawn_blocking(ram_and_cpu).await.unwrap_or((16 << 30, 8 << 30, 4, String::new()));
     let mut gpus = vec![];
-    if let Some(server) = server {
+    if let Some(server) = server.filter(|_| !crate::winsec::engine_blocked()) {
         let mut cmd = crate::proc::command(paths, &server.to_string_lossy(), &["--list-devices".to_string()]);
-        if let Ok((_, out, err, _)) = crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(25)).await {
-            gpus = parse_list_devices(&format!("{out}\n{err}"));
+        if let Ok((code, out, err, _)) = crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(25)).await {
+            let all = format!("{out}\n{err}");
+            if code != Some(0) {
+                crate::winsec::note_engine_result(code, &all);
+            }
+            gpus = parse_list_devices(&all);
         }
     }
     gpus.retain(|g| !g.name.to_lowercase().contains("llvmpipe"));

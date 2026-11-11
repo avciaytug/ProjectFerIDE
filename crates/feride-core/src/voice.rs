@@ -125,12 +125,16 @@ impl Voice {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         let (mut child, kill) = crate::proc::spawn(&mut cmd)?;
-        tokio::spawn(async move {
-            let _ = child.wait().await;
-        });
         // Hazır olmasını bekle (model yükleme 30 sn'ye kadar sürebilir).
         let url = format!("http://127.0.0.1:{port}/health");
         for _ in 0..240 {
+            // Süreç hemen kapandıysa (ör. Windows Akıllı Uygulama Denetimi Python'u engelledi) 60 sn bekleme.
+            if let Ok(Some(st)) = child.try_wait() {
+                if crate::winsec::sac_enforced() {
+                    anyhow::bail!("Ses sunucusu ({which}) başlamadı. {}", crate::winsec::SAC_HELP);
+                }
+                anyhow::bail!("Ses sunucusu ({which}) kapandı ({st}); ayrıntı: logs/{which}_server.log");
+            }
             if let Ok(r) = self.http.get(&url).timeout(Duration::from_secs(2)).send().await {
                 if r.status().is_success() {
                     if which == "tts" {
@@ -138,6 +142,9 @@ impl Voice {
                             *self.voices.lock().unwrap() = Some(j["voices"].clone());
                         }
                     }
+                    tokio::spawn(async move {
+                        let _ = child.wait().await;
+                    });
                     *slot.lock().unwrap() = Some(Srv { port, kill });
                     return Ok(port);
                 }
@@ -145,6 +152,9 @@ impl Voice {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         kill.kill_tree();
+        if crate::winsec::sac_enforced() {
+            anyhow::bail!("Ses sunucusu ({which}) başlamadı. {}", crate::winsec::SAC_HELP);
+        }
         anyhow::bail!("Ses sunucusu ({which}) 60 saniyede başlamadı.")
     }
 
