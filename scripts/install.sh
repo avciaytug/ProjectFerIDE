@@ -31,7 +31,7 @@ if [ "$PLAT" = linux ]; then
 fi
 
 say "FerIDE sürümü sorgulanıyor…"
-URL="$(curl -fsSL -H 'User-Agent: FerIDE-installer' "https://api.github.com/repos/$REPO/releases?per_page=10" \
+URL="$(curl -fsSL -H 'User-Agent: FerIDE-installer' "https://api.github.com/repos/$REPO/releases?per_page=20" \
   | grep -o "\"browser_download_url\": *\"[^\"]*/$ASSET\"" | head -1 | sed 's/.*"\(https[^"]*\)"/\1/')"
 [ -n "$URL" ] || { echo "Bu platform için sürüm bulunamadı ($ASSET)."; exit 1; }
 

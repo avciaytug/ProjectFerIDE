@@ -59,9 +59,14 @@ jobs:
           cp target/${{ matrix.target }}/release/feride README.md CHANGELOG.md dist/
           tar -czf ${{ matrix.asset }} -C dist .
           shasum -a 256 ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+      - name: Sürüm notu
+        shell: bash
+        run: bash scripts/release-notes.sh "${{ inputs.tag || github.ref_name }}" > release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          name: FerIDE ${{ inputs.tag || github.ref_name }}
+          body_path: release-notes.md
           prerelease: true
           files: |
             ${{ matrix.asset }}
