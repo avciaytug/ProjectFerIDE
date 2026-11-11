@@ -18,7 +18,7 @@ Windows, Linux ve macOS'ta aynı davranış.
 - **IDE:** gezgin, git durumu, CodeMirror düzenleyici, gerçek terminal, model günlüğü.
 - **Sohbet:** mesaj kutusunun altında düşünme aç/kapat ve model seçici; her yanıtta girdi/çıktı tokenları ve token/sn.
 - **Canlı sesli sohbet (isteğe bağlı):** Gemini Live benzeri, araya girilebilen, tamamen yerel sesli konuşma
-  (`Ctrl+Shift+V`). Whisper ile sesle yazma, Türkçe sesli yanıt (Feride — Ahenk Cep, Fahrettin — Piper).
+  (`Ctrl+Shift+V`). Whisper ile sesle yazma, Türkçe sesli yanıt (Feride — Ahenk Cep; erkek ses — Piper DFKI).
 
 ## Kurulum
 

@@ -1,5 +1,16 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.6) — Ses paketi yeni bilgisayarlarda kuruluyor
+
+- **Ses paketi kurulumu düzeltildi:** Piper'ın Türkçe "fahrettin" sesi 30.12.2025'te ses sahiplerinin isteğiyle Piper
+  deposundan kaldırıldığı için indirme 404 veriyor ve ses paketi yeni bilgisayarlarda hiç kurulamıyordu.
+- **Feride'nin sesi (Ahenk Cep) artık kurulumla iniyor:** model dosyaları daha önce yalnızca eski v5.3.8 kurulumundan
+  taşınabiliyordu; yeni bilgisayarlarda kadın sesi hiç yoktu. Resmi depodan (ozgurguler/ahenk-cep-tr, CC BY 4.0)
+  sabit bir sürüm indirilir ve SHA-256 ile doğrulanır.
+- **Erkek ses Piper DFKI'ye geçti** (veri kümesi CC BY-NC-SA 4.0) ve isteğe bağlı oldu: inemezse ses paketi yine de
+  kurulur. Eski kurulumlarda yerelde kalmış fahrettin dosyası yalnızca DFKI yoksa kullanılır.
+- Ses paketi sürümü 4: yarım kalmış ya da eski kurulumlarda Ayarlar > Ses'te **Güncelle** çıkar.
+
 ## beta v5.4 (5.4.0-beta.5) — Windows Akıllı Uygulama Denetimi uyumu, kurulum düzeltmeleri
 
 ### Windows

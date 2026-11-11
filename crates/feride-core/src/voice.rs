@@ -33,7 +33,7 @@ pub struct VoiceStatus {
     pub installed: bool,
     pub stt: String,
     pub tts: String,
-    /// TTS sunucusunda gerçekten yüklenen sesler (female = Feride/Ahenk Cep, male = Fahrettin/Piper).
+    /// TTS sunucusunda gerçekten yüklenen sesler (female = Feride/Ahenk Cep, male = Piper DFKI).
     pub voices: Option<serde_json::Value>,
     /// Konuşma tanıma motoru: "gpu" (whisper.cpp) | "cpu" (faster-whisper) | null (henüz başlamadı)
     pub stt_engine: Option<String>,

@@ -7,7 +7,7 @@ Sesler:
   female  Feride — Ahenk Cep (Türkçe kadın sesi, 48 kHz, CC BY 4.0)
           models/ahenk_cep/  →  *.onnx (yalnızca onnxruntime+numpy)  veya
                                 student.pt + decoder.pt + ahenk_cep.py (PyTorch)
-  male    Fahrettin — Piper (models/piper/tr_TR-fahrettin-medium.onnx)
+  male    Erkek ses — Piper DFKI (models/piper/tr_TR-dfki-medium.onnx)
 
 API:
   POST /tts     {"text": "...", "voice": "female"|"male", "speed": 1.0}  → audio/wav (int16)
@@ -38,7 +38,11 @@ log = logging.getLogger("feride-tts")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_ROOT = os.environ.get("FERIDE_ROOT") or os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 MODELS = os.path.join(APP_ROOT, "models")
-PIPER_MODEL = os.path.join(MODELS, "piper", "tr_TR-fahrettin-medium.onnx")
+# Erkek ses: Piper DFKI. Eski kurulumlarda yalnızca yerelde kalmış fahrettin varsa o kullanılır
+# (fahrettin, ses sahiplerinin isteğiyle Piper deposundan kaldırıldı; FerIDE artık indirmez).
+PIPER_MODEL = os.path.join(MODELS, "piper", "tr_TR-dfki-medium.onnx")
+if not os.path.isfile(PIPER_MODEL) and os.path.isfile(os.path.join(MODELS, "piper", "tr_TR-fahrettin-medium.onnx")):
+    PIPER_MODEL = os.path.join(MODELS, "piper", "tr_TR-fahrettin-medium.onnx")
 AHENK_DIR = os.path.join(MODELS, "ahenk_cep")
 PORT = int(os.environ.get("FERIDE_TTS_PORT", "5050"))
 
@@ -138,7 +142,7 @@ def load_engines():
     if os.path.isfile(PIPER_MODEL):
         try:
             ENGINES["male"] = PiperVoiceEngine()
-            log.info("✅ Erkek ses hazır (Piper fahrettin)")
+            log.info("✅ Erkek ses hazır (Piper: %s)", os.path.basename(PIPER_MODEL))
         except Exception as e:  # noqa: BLE001
             log.warning("Piper yüklenemedi: %s", e)
     if _ahenk_available():

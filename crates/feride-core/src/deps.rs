@@ -16,7 +16,23 @@ use crate::events::EventBus;
 use crate::paths::Paths;
 
 /// Ses paketi sürümü (işaret dosyasına yazılır). Yeni model ya da bağımlılık eklenince artırılır.
-pub const VOICE_PACK: &str = "voice-pack-3";
+pub const VOICE_PACK: &str = "voice-pack-4";
+
+/// Feride'nin sesi: Ahenk Cep (ozgurguler/ahenk-cep-tr; ağırlıklar CC BY 4.0, kod Apache-2.0), sabit commit.
+const AHENK_BASE: &str = "https://huggingface.co/ozgurguler/ahenk-cep-tr/resolve/345c4cbb934815fa96ffd0d5061fd913237544bc";
+const AHENK_FILES: [(&str, &str); 3] = [
+    ("student.pt", "020e2d31cb51847a9f06376febbb6ba9329ded7c3084a7fdd4f45adada3f23d3"),
+    ("decoder.pt", "5caeede49ce987a94e31fc8a58bed569e993c820fe6f1c9b301d6c489d3cbbd1"),
+    ("ahenk_cep.py", "01fb2b741b9991888305c9bd9fcadeba1f23025c7a92b738be379f6fcb36b332"),
+];
+/// Erkek ses: Piper tr_TR-dfki-medium (veri kümesi CC BY-NC-SA 4.0), sabit commit. Eski "fahrettin" sesi
+/// 30.12.2025'te ses sahiplerinin isteğiyle Piper deposundan kaldırıldı; artık indirilmez.
+const PIPER_BASE: &str =
+    "https://huggingface.co/rhasspy/piper-voices/resolve/cf910fb59f1d79ab3b625a63993a108751c6c25d/tr/tr_TR/dfki/medium";
+const PIPER_FILES: [(&str, &str); 2] = [
+    ("tr_TR-dfki-medium.onnx", "2844717f524ab965d3fe86e60562cbb601d3e456836efcc2196cc3a14112a8fb"),
+    ("tr_TR-dfki-medium.onnx.json", "13ebd7810f1b61b5027583cf3131a0a233b6ea81c38f2200ebc4ff41c3cca039"),
+];
 
 /// GPU konuşma tanıma: whisper.cpp sunucusu FerIDE'nin kendi CI'ında (Vulkan/Metal) derlenip bu ön sürüme yüklenir.
 const WHISPER_GPU_RELEASE: &str = "https://github.com/avciaytug/ProjectFerIDE/releases/download/deps-whisper-v1.9.5";
@@ -748,14 +764,27 @@ impl Deps {
     /// v5.3.8 kurulumundan taşınmışsa kullanılır.
     async fn fetch_voice_models(&self) -> anyhow::Result<()> {
         let models = self.paths.voice().join("models");
+        // Feride'nin sesi (varsayılan, kadın): zorunlu.
+        let ahenk = models.join("ahenk_cep");
+        for (f, sha) in AHENK_FILES {
+            self.fetch_verified(&format!("{AHENK_BASE}/{f}"), &ahenk.join(f), sha, "Feride'nin sesi (Ahenk Cep)").await?;
+        }
+        let attribution = ahenk.join("LICENSE_ATTRIBUTION.txt");
+        if !attribution.is_file() {
+            let _ = std::fs::write(
+                &attribution,
+                "Ahenk Cep, Ahenk (https://github.com/ozguradmin/ahenk-turkish-tts), CC BY 4.0\n\
+                 Model: https://huggingface.co/ozgurguler/ahenk-cep-tr\n\
+                 Inference code ahenk_cep.py: Apache-2.0. Base model EMA Lightning: Apache-2.0.\n\
+                 Synthetic designed voice (f022); not a real person's voice.\n",
+            );
+        }
+        // Erkek ses isteğe bağlıdır: inmezse yalnızca uyarılır (Feride'nin sesi yeterli).
         let piper = models.join("piper");
-        let files = [
-            (piper.join("tr_TR-fahrettin-medium.onnx"), "https://huggingface.co/rhasspy/piper-voices/resolve/main/tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx"),
-            (piper.join("tr_TR-fahrettin-medium.onnx.json"), "https://huggingface.co/rhasspy/piper-voices/resolve/main/tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json"),
-        ];
-        for (dest, url) in files {
-            if !dest.is_file() {
-                self.download("voice", url, &dest, "Türkçe ses modeli").await?;
+        for (f, sha) in PIPER_FILES {
+            if let Err(e) = self.fetch_verified(&format!("{PIPER_BASE}/{f}"), &piper.join(f), sha, "Erkek ses (Piper)").await {
+                tracing::warn!("erkek ses (Piper) kurulamadı, yalnızca Feride'nin sesi kullanılacak: {e}");
+                break;
             }
         }
         // large-v3-turbo: Türkçede en doğrusu (~3 sn); "otomatik" kipte hızlı modelin emin olmadığı
@@ -782,6 +811,23 @@ impl Deps {
                     self.download("voice", &url, &dest, &format!("Whisper {size}")).await?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Dosyayı indirir ve SHA-256 ile doğrular; doğru dosya zaten varsa indirmez.
+    async fn fetch_verified(&self, url: &str, dest: &Path, sha256: &str, label: &str) -> anyhow::Result<()> {
+        if dest.is_file() {
+            let d = dest.to_path_buf();
+            if tokio::task::spawn_blocking(move || sha256_file(&d)).await?? == sha256 {
+                return Ok(());
+            }
+        }
+        self.download("voice", url, dest, label).await?;
+        let d = dest.to_path_buf();
+        if tokio::task::spawn_blocking(move || sha256_file(&d)).await?? != sha256 {
+            let _ = tokio::fs::remove_file(dest).await;
+            anyhow::bail!("{label} doğrulanamadı (SHA-256 uyuşmuyor): {url}");
         }
         Ok(())
     }

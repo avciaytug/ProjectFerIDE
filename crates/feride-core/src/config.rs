@@ -143,7 +143,7 @@ impl Default for AgentSettings {
 #[serde(default)]
 pub struct VoiceSettings {
     pub enabled: bool,
-    /// female (Feride — Ahenk Cep) | male (Fahrettin — Piper)
+    /// female (Feride — Ahenk Cep) | male (Piper DFKI)
     pub voice: String,
     pub speed: f32,
     pub auto_speak: bool,
