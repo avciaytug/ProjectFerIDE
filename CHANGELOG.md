@@ -1,5 +1,13 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.9) — Kurulum yerini seçme, kaldırıcı (beta.8'in tamamlanmış hâli)
+
+beta.8'in derlemesi yarım kalmıştı (yalnızca Linux paketi yayınlandı ve onda `feride uninstall` çalışmıyordu). Bu
+sürüm beta.8'deki her şeyi içerir, ek olarak:
+
+- **Linux'ta kaldırma düzeltildi:** kaldırıcı kendi iş parçacığını "çalışan başka bir FerIDE" sanıp kapatıyordu.
+- Klasör karşılaştırmaları macOS'ta `/var` ↔ `/private/var`, Windows'ta kısa (8.3) klasör adlarıyla da doğru çalışıyor.
+
 ## beta v5.4 (5.4.0-beta.8) — Kurulum yerini seçme, kaldırıcı, işletim sistemine uygun komutlar
 
 ### Kurulum
