@@ -68,6 +68,33 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
             open::that_detached(&target)?;
             json!(true)
         }
+        "app.install_info" => {
+            let info = crate::installer::running_info();
+            json!({
+                "installed": info.is_some(),
+                "info": info,
+                "exe_dir": feride_core::install::current_exe_dir(),
+                "data_dir": core.paths.data,
+            })
+        }
+        "app.data_size" => {
+            let d = core.paths.data.clone();
+            json!(tokio::task::spawn_blocking(move || feride_core::install::dir_size(&d)).await?)
+        }
+        "app.uninstall" => {
+            if crate::installer::running_info().is_none() {
+                bail!("Bu FerIDE kurulmadan (taşınabilir) çalışıyor; kaldırmak için klasörünü silmeniz yeterli.");
+            }
+            crate::installer::spawn_uninstaller(p["purge"].as_bool().unwrap_or(false))?;
+            // Yanıt arayüze ulaşsın, sonra kapan: kaldırıcı bu sürecin bitmesini bekliyor.
+            let quit = st.quit.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                quit.notify_waiters();
+                quit.notify_one();
+            });
+            json!(true)
+        }
         "app.open_security" => {
             feride_core::winsec::open_security_settings()?;
             json!(true)

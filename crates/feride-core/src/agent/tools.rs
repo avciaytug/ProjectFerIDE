@@ -651,6 +651,11 @@ async fn run_command(ctx: &ToolCtx, a: &Value) -> ToolResult {
     if command.trim().is_empty() {
         return ToolResult::err("command boş");
     }
+    // Başka bir işletim sistemine ait komut (ör. Windows'ta sudo/apt/systemctl): çalıştırmadan karşılığını söyle.
+    let os = super::oscmd::Os::current();
+    if let Some(msg) = super::oscmd::foreign_command(command, os) {
+        return ToolResult::err(msg);
+    }
     let cwd = match s(a, "cwd") {
         "" => ctx.workspace.clone(),
         c => resolve_path(ctx, c),
@@ -731,6 +736,12 @@ async fn run_command(ctx: &ToolCtx, a: &Value) -> ToolResult {
             }
             let max = ctx.settings.agent.max_tool_output_chars;
             let mut text = truncate_middle(&text, max);
+            if code != Some(0) {
+                if let Some(hint) = super::oscmd::not_found_hint(&text, os) {
+                    text.push('\n');
+                    text.push_str(&hint);
+                }
+            }
             if timed_out {
                 text.push_str(&format!("\n[ZAMAN AŞIMI: {timeout} sn içinde bitmedi ve durduruldu. Uzun işler için background=true kullan.]"));
             }

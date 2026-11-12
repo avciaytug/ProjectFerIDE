@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 # FerIDE kurulumu (Linux / macOS).
 #   curl -fsSL https://raw.githubusercontent.com/avciaytug/ProjectFerIDE/main/scripts/install.sh | bash
-# Uygulama kullanıcı klasörüne kurulur. Linux'ta pencere için gereken sistem kitaplıkları
-# eksikse TEK bir sudo onayıyla kurulur. Diğer her şeyi FerIDE ilk açılışta kendisi kurar.
+# Paketi indirip doğrular ve FerIDE kurulum sihirbazını açar: programın ve verilerin (modeller, sohbetler)
+# nereye kurulacağını siz seçersiniz (ev klasörü, başka bir disk bölümü, /mnt/... gibi). FerIDE zaten kuruluysa
+# yerinde güncellenir. Masaüstü oturumu yoksa (SSH, sunucu) sihirbaz açılmaz, varsayılan konumlara kurulur.
+# Linux'ta pencere için gereken sistem kitaplıkları eksikse TEK bir sudo onayıyla kurulur.
+# Kaldırmak için: feride uninstall (ya da FerIDE'de Ayarlar > Genel > Kaldır).
+#
+# Sihirbazsız kurulum için isteğe bağlı ortam değişkenleri:
+#   FERIDE_INSTALL_DIR   program klasörü (bu ya da FERIDE_DATA_DIR verilirse sihirbaz açılmaz)
+#   FERIDE_DATA_DIR      veri klasörü: modeller, sohbetler, ayarlar (varsayılan: ~/.feride)
+#   FERIDE_NO_SHORTCUTS  1 ise uygulama menüsü/masaüstü kısayolu ve ~/.local/bin/feride oluşturulmaz
+#   FERIDE_NO_LAUNCH     1 ise kurulumdan sonra FerIDE açılmaz
 set -euo pipefail
 
 REPO="avciaytug/ProjectFerIDE"
@@ -26,8 +35,8 @@ fi
 ARCH="$(uname -m)"
 case "$ARCH" in x86_64|amd64) ARCH=x64 ;; arm64|aarch64) ARCH=arm64 ;; *) echo "Desteklenmeyen mimari: $ARCH"; exit 1 ;; esac
 case "$OS" in
-  Linux) PLAT=linux; DEST="$HOME/.local/share/feride"; BIN="$HOME/.local/bin" ;;
-  Darwin) PLAT=macos; DEST="$HOME/Applications/FerIDE"; BIN="$HOME/.local/bin" ;;
+  Linux) PLAT=linux; POINTER="${XDG_CONFIG_HOME:-$HOME/.config}/feride/install.json" ;;
+  Darwin) PLAT=macos; POINTER="$HOME/Library/Application Support/FerIDE/install.json" ;;
   *) echo "Desteklenmeyen sistem: $OS"; exit 1 ;;
 esac
 ASSET="feride-$PLAT-$ARCH.tar.gz"
@@ -62,25 +71,49 @@ if curl -fsSL "$URL.sha256" -o "$TMP/sum" 2>/dev/null; then
   say "SHA-256 doğrulandı."
 fi
 
-mkdir -p "$DEST" "$BIN"
-tar -xzf "$TMP/$ASSET" -C "$DEST"
-chmod +x "$DEST/feride"
-[ "$PLAT" = macos ] && xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
-ln -sf "$DEST/feride" "$BIN/feride"
+mkdir -p "$TMP/paket"
+tar -xzf "$TMP/$ASSET" -C "$TMP/paket"
+chmod +x "$TMP/paket/feride"
+if [ "$PLAT" = macos ]; then xattr -dr com.apple.quarantine "$TMP/paket" 2>/dev/null || true; fi
 
-if [ "$PLAT" = linux ]; then
-  mkdir -p "$HOME/.local/share/applications"
-  cat > "$HOME/.local/share/applications/feride.desktop" <<EOF
-[Desktop Entry]
-Name=FerIDE
-Comment=Yerel yapay zeka geliştirme ortamı
-Exec=$DEST/feride
-Terminal=false
-Type=Application
-Categories=Development;IDE;
-EOF
+# Kurulumu FerIDE'nin kendisi yapar: program/veri klasörü, kısayollar, ~/.local/bin/feride.
+ARGS=(install)
+GUI=0
+if [ "$PLAT" = macos ] || [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then GUI=1; fi
+if [ -n "${FERIDE_INSTALL_DIR:-}" ] || [ -n "${FERIDE_DATA_DIR:-}" ]; then
+  ARGS+=(--yes)
+  if [ -n "${FERIDE_INSTALL_DIR:-}" ]; then ARGS+=(--dir "$FERIDE_INSTALL_DIR"); fi
+  if [ -n "${FERIDE_DATA_DIR:-}" ]; then ARGS+=(--data "$FERIDE_DATA_DIR"); fi
+  if [ "${FERIDE_NO_SHORTCUTS:-}" = 1 ]; then ARGS+=(--no-shortcuts --no-path); fi
+  say "Kuruluyor…"
+elif [ "$GUI" = 1 ]; then
+  # Kuruluysa yerinde güncellenir; değilse kurulum sihirbazı açılır.
+  ARGS+=(--update)
+  say "Kurulum sihirbazı açılıyor: FerIDE'nin ve verilerinin kurulacağı yeri seçin… (kuruluysa doğrudan güncellenir)"
+else
+  # Masaüstü oturumu yok: kuruluysa güncelle, değilse varsayılan konumlara kur.
+  ARGS+=(--update --yes)
+  if [ "${FERIDE_NO_SHORTCUTS:-}" = 1 ]; then ARGS+=(--no-shortcuts --no-path); fi
+  say "Masaüstü oturumu yok; varsayılan konumlara kuruluyor (yer seçmek için FERIDE_INSTALL_DIR / FERIDE_DATA_DIR)."
 fi
+if [ "${FERIDE_NO_LAUNCH:-}" = 1 ] || [ "$GUI" = 0 ]; then ARGS+=(--no-launch); fi
 
-say "FerIDE kuruldu: $DEST  (komut: feride)"
-case ":$PATH:" in *":$BIN:"*) ;; *) echo "Not: $BIN PATH'inizde değil; kabuk ayarınıza ekleyin." ;; esac
-nohup "$DEST/feride" >/dev/null 2>&1 &
+set +e
+"$TMP/paket/feride" "${ARGS[@]}" </dev/null
+CODE=$?
+set -e
+case "$CODE" in
+  0) ;;
+  2) echo "Kurulum iptal edildi; bilgisayarınızda bir değişiklik yapılmadı."; exit 0 ;;
+  *) echo "Kurulum başarısız oldu (çıkış kodu $CODE). Ayrıntılar: ${TMPDIR:-/tmp}/feride-kurulum.log"; exit 1 ;;
+esac
+
+say "FerIDE kuruldu."
+if [ -f "$POINTER" ]; then
+  get() { sed -n "s/.*\"$1\": *\"\(.*\)\".*/\1/p" "$POINTER" | head -1; }
+  echo "  Program: $(get install_dir)"
+  echo "  Veriler: $(get data_dir)"
+fi
+echo "Kaldırmak için: feride uninstall"
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "Not: ~/.local/bin PATH'inizde değil; 'feride' komutu için kabuk ayarınıza ekleyin." ;; esac
+if [ "$GUI" = 0 ]; then echo "Sunucu olarak çalıştırmak için: feride serve (tarayıcıdan bağlanılır)"; fi

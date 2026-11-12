@@ -13,9 +13,32 @@ pub enum UserEvent {
     Quit,
 }
 
+/// Pencere başlığı ve boyutları (ana uygulama ya da kurulum sihirbazı).
+pub struct WindowSpec {
+    pub title: String,
+    pub size: (f64, f64),
+    pub min_size: (f64, f64),
+}
+
+impl WindowSpec {
+    pub fn main() -> Self {
+        Self { title: format!("FerIDE {}", feride_core::DISPLAY_VERSION), size: (1440.0, 900.0), min_size: (900.0, 600.0) }
+    }
+    pub fn installer() -> Self {
+        Self { title: "FerIDE kurulumu".into(), size: (900.0, 780.0), min_size: (640.0, 560.0) }
+    }
+}
+
 /// Pencereyi açar ve kapanana kadar bekler. WebView açılamazsa `Err` döner
 /// (çağıran taraf arayüzü varsayılan tarayıcıda açar).
-pub fn run(url: String, origin: String, data_dir: std::path::PathBuf, quit: Arc<tokio::sync::Notify>, on_exit: impl FnOnce() + 'static) -> anyhow::Result<()> {
+pub fn run(
+    url: String,
+    origin: String,
+    data_dir: std::path::PathBuf,
+    spec: WindowSpec,
+    quit: Arc<tokio::sync::Notify>,
+    on_exit: impl FnOnce() + 'static,
+) -> anyhow::Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     // Arayüzden "Kapat" gelirse pencereyi kapat.
@@ -29,9 +52,9 @@ pub fn run(url: String, origin: String, data_dir: std::path::PathBuf, quit: Arc<
     });
 
     let window = WindowBuilder::new()
-        .with_title(format!("FerIDE {}", feride_core::DISPLAY_VERSION))
-        .with_inner_size(LogicalSize::new(1440.0, 900.0))
-        .with_min_inner_size(LogicalSize::new(900.0, 600.0))
+        .with_title(spec.title)
+        .with_inner_size(LogicalSize::new(spec.size.0, spec.size.1))
+        .with_min_inner_size(LogicalSize::new(spec.min_size.0, spec.min_size.1))
         .with_window_icon(Some(app_icon()))
         .build(&event_loop)?;
 

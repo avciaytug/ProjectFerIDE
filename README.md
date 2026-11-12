@@ -24,7 +24,20 @@ Windows, Linux ve macOS'ta aynı davranış.
 
 **Gereksinimler:** Windows 10/11 (x64), Linux (x64, WebKitGTK 4.1) ya da Apple Silicon Mac.
 En az 16 GB RAM önerilir; ekran kartı (Vulkan / Metal) isteğe bağlıdır ama modelleri ve konuşma tanımayı çok hızlandırır.
-Yönetici izni gerekmez: FerIDE her şeyi kullanıcı klasörünüze kurar.
+Yönetici izni gerekmez.
+
+**Nereye kurulacağını siz seçersiniz.** Kurulum sihirbazı iki klasör sorar; ikisi de herhangi bir sürücüde
+(C:, D:…) ya da disk bölümünde (`/home`, `/mnt/disk2`…) olabilir, **Değiştir…** ile seçilir ya da elle yazılır:
+
+| Klasör | İçerik | Varsayılan |
+|---|---|---|
+| **Program klasörü** | `feride.exe` (~25 MB) | Windows `%LOCALAPPDATA%\Programs\FerIDE`, Linux `~/.local/share/feride`, macOS `~/Applications/FerIDE` |
+| **Veri klasörü** | modeller, llama.cpp, ses paketi, sohbetler, ayarlar (onlarca GB olabilir) | `~/.feride` (Windows `%USERPROFILE%\.feride`) |
+
+Sihirbaz seçilen sürücüdeki boş alanı gösterir; seçilen klasörde FerIDE verileri varsa (ör. başka bir diske
+taşıdığınız modeller) onları tanır ve kullanmaya devam eder. Masaüstü/Başlat menüsü kısayolu ve komut satırından
+`feride` olarak çalıştırma isteğe bağlıdır. Sürücü kökü, ev klasörü ve sistem klasörleri seçilemez; bunlar
+seçilirse içine bir `FerIDE` klasörü açılır.
 
 ### Windows
 
@@ -34,11 +47,13 @@ Yönetici izni gerekmez: FerIDE her şeyi kullanıcı klasörünüze kurar.
 irm https://raw.githubusercontent.com/avciaytug/ProjectFerIDE/main/scripts/install.ps1 | iex
 ```
 
-En son sürümü indirir, SHA-256 ile doğrular, `%LOCALAPPDATA%\Programs\FerIDE` klasörüne kurar,
-Başlat menüsüne ve masaüstüne kısayol ekler ve FerIDE'yi açar.
+En son sürümü indirir, SHA-256 ile doğrular ve **kurulum sihirbazını** açar: klasörleri seçip **Kur**'a basın.
+FerIDE "Ayarlar → Uygulamalar" listesine eklenir ve açılır. Zaten kuruluysa sihirbaz açılmaz; bulunduğu yerde
+güncellenir.
 
 **Yol 2 — elle.** [Sürümler](https://github.com/avciaytug/ProjectFerIDE/releases) sayfasında en üstteki sürümden
-`feride-windows-x64.zip` dosyasını indirin, bir klasöre çıkarın ve `feride.exe`'yi çalıştırın.
+`feride-windows-x64.zip` dosyasını indirin, bir klasöre çıkarın ve `feride.exe`'yi çalıştırın: aynı kurulum
+sihirbazı açılır. Kurmadan kullanmak isterseniz sihirbazdaki **Kurmadan, bu klasörden kullan (taşınabilir)**'ı seçin.
 FerIDE henüz dijital olarak imzalı olmadığı için Windows "Bilgisayarınız korundu" uyarısı gösterebilir:
 **Ek bilgi → Yine de çalıştır**'a tıklayın.
 
@@ -48,9 +63,28 @@ FerIDE henüz dijital olarak imzalı olmadığı için Windows "Bilgisayarınız
 curl -fsSL https://raw.githubusercontent.com/avciaytug/ProjectFerIDE/main/scripts/install.sh | bash
 ```
 
-Ya da [Sürümler](https://github.com/avciaytug/ProjectFerIDE/releases) sayfasından `feride-linux-x64.tar.gz` /
+Masaüstü oturumunda kurulum sihirbazı açılır (klasör seçimi Windows'takiyle aynı). SSH/sunucu gibi masaüstü
+olmayan oturumlarda sihirbaz açılmaz, varsayılan konumlara kurulur. Ya da
+[Sürümler](https://github.com/avciaytug/ProjectFerIDE/releases) sayfasından `feride-linux-x64.tar.gz` /
 `feride-macos-arm64.tar.gz` dosyasını indirip açın ve `feride`'yi çalıştırın. Linux'ta pencere için WebKitGTK gerekir
 (betik eksikse tek bir `sudo` onayıyla kurar). macOS'ta elle indirdiyseniz: `xattr -dr com.apple.quarantine feride`.
+
+### Sihirbazsız (otomatik) kurulum
+
+Klasörler ortam değişkenleriyle verilirse sihirbaz açılmaz:
+
+```powershell
+$env:FERIDE_INSTALL_DIR = 'D:\FerIDE'; $env:FERIDE_DATA_DIR = 'D:\FerIDE-Veri'
+irm https://raw.githubusercontent.com/avciaytug/ProjectFerIDE/main/scripts/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/avciaytug/ProjectFerIDE/main/scripts/install.sh \
+  | FERIDE_INSTALL_DIR=/mnt/disk2/feride FERIDE_DATA_DIR=/mnt/disk2/feride-veri bash
+```
+
+`FERIDE_NO_SHORTCUTS=1` kısayol ve PATH eklemez, `FERIDE_NO_LAUNCH=1` kurulumdan sonra açmaz. Aynısı programın
+kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerIDE-Veri`.
 
 ### İlk açılış
 
@@ -67,9 +101,17 @@ Ya da [Sürümler](https://github.com/avciaytug/ProjectFerIDE/releases) sayfası
 
 ### Güncelleme ve kaldırma
 
-- **Güncelleme:** kurulum komutunu yeniden çalıştırın; ayarlar, modeller ve sohbetler korunur.
-- **Kaldırma:** kurulum klasörünü ve kısayolları silin. Modeller ve sohbetler `~/.feride` klasöründedir
-  (Windows: `%USERPROFILE%\.feride`); onları da silmek isterseniz bu klasörü kaldırın.
+- **Güncelleme:** kurulum komutunu yeniden çalıştırın; FerIDE bulunduğu yerde güncellenir, ayarlar, modeller ve
+  sohbetler korunur.
+- **Kaldırma** (üç yoldan biri):
+  - **Windows:** Ayarlar → Uygulamalar → Yüklü uygulamalar → **FerIDE** → **Kaldır**.
+  - **FerIDE içinden:** Ayarlar → Genel → Kurulum → **FerIDE'yi kaldır…**
+  - **Komut satırı:** `feride uninstall` (Linux'ta uygulama menüsünde FerIDE'ye sağ tıklayıp **FerIDE'yi kaldır**).
+
+  Program, kısayollar, PATH girdisi ve "Uygulamalar" kaydı silinir. Modeller ve sohbetler varsayılan olarak
+  **yerinde kalır** (yeniden kurunca kaldığınız yerden devam edilir); kaldırırken "verileri de sil" seçilirse
+  (`feride uninstall --purge`) yalnızca FerIDE'nin oluşturduğu dosyalar silinir, veri klasörüne sizin koyduğunuz
+  başka dosyalara dokunulmaz.
 
 ### Sorun giderme
 
@@ -108,10 +150,14 @@ cargo build --release
 | `feride serve [--port N] [--open]` | Başsız sunucu; arayüze tarayıcıdan bağlanılır |
 | `feride doctor` | Bağımlılık, donanım, model, MCP ve skill durumu |
 | `feride setup [llama git uv node pydocs voice]` | Eksikleri kurar |
+| `feride install [--dir D] [--data D] [--yes]` | Kurulum sihirbazı; `--yes` ile sormadan kurar (`--no-shortcuts`, `--no-path`, `--no-launch`) |
+| `feride uninstall [--purge] [--yes]` | Kaldırır; `--purge` modelleri ve sohbetleri de siler |
 
 ## Veri klasörü
 
-`~/.feride` (Windows: `%USERPROFILE%\.feride`) — v5.3.8 ile aynı.
+Varsayılan `~/.feride` (Windows: `%USERPROFILE%\.feride`, v5.3.8 ile aynı); kurulumda başka bir sürücü ya da
+klasör seçilebilir. Seçim program klasöründeki `install.json`'da saklanır; `FERIDE_HOME` ortam değişkeni her
+ikisinin de önüne geçer. Kullanılan klasör Ayarlar → Genel'de ve `feride doctor`'da görünür.
 
 | Yol | İçerik |
 |---|---|

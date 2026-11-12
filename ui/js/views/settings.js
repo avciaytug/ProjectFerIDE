@@ -1,6 +1,6 @@
 // Ayarlar: genel, ajan ve güvenlik, düzenleyici, ses, MCP, skill'ler, hafıza.
 import { S, saveSettings, loadSettings } from '../app.js';
-import { h, icon, toast, relTime, confirmBox, modal, renderMarkdown } from '../util.js';
+import { h, icon, toast, relTime, confirmBox, modal, renderMarkdown, fmtBytes } from '../util.js';
 import * as Editor from './editor.js';
 
 let tab = 'general';
@@ -29,6 +29,47 @@ function render() {
   ({ general, agent, mcp, skills, memory, voice })[tab](body);
 }
 
+function renderInstall(sec, inst) {
+  sec.lastChild.remove();
+  sec.append(
+    field('Program klasörü', inst.installed ? 'FerIDE buraya kurulu' : 'Bu kopya kurulmadan (taşınabilir) çalışıyor', h('div', { class: 'row' },
+      h('span', { class: 'mono small nowrap', style: { maxWidth: '420px' }, title: inst.exe_dir }, inst.exe_dir),
+      h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_path', { path: inst.exe_dir }).catch((e) => toast(e.message, 'err')) }, icon('folder'), 'Aç'))),
+    field('Kaldır', inst.installed ? 'Program, kısayollar ve kaldırma kaydı silinir; modelleri silmek isteğe bağlıdır.' : 'Kaldırmak için program klasörünü silmeniz yeterli.',
+      inst.installed ? h('button', { class: 'btn sm danger', onclick: () => uninstallDialog(inst) }, icon('trash'), 'FerIDE\'yi kaldır…') : h('span', { class: 'small muted' }, '—')));
+}
+
+async function uninstallDialog(inst) {
+  const purge = h('input', { type: 'checkbox' });
+  const sizeEl = h('span', { class: 'muted' }, 'hesaplanıyor…');
+  S.rpc.call('app.data_size').then((n) => { sizeEl.textContent = fmtBytes(n); }).catch(() => { sizeEl.textContent = '?'; });
+  modal({
+    title: 'FerIDE kaldırılsın mı?',
+    body: h('div', { class: 'col' },
+      h('div', {}, 'FerIDE kapatılacak; program dosyaları, kısayollar ve "Uygulamalar" kaydı silinecek.'),
+      h('label', { class: 'check', style: { alignItems: 'flex-start' } }, purge,
+        h('span', {}, 'Modelleri, sohbetleri, indirilen araçları ve ayarları da sil (', sizeEl, ')',
+          h('div', { class: 'mono tiny muted' }, inst.data_dir))),
+      h('div', { class: 'tiny muted' }, 'İşaretlemezseniz veri klasörü yerinde kalır; FerIDE\'yi yeniden kurduğunuzda kaldığınız yerden devam eder.')),
+    actions: [
+      { label: 'Vazgeç' },
+      {
+        label: 'Kaldır',
+        cls: 'danger',
+        run: () => {
+          (async () => {
+            if (purge.checked && !(await confirmBox('Veriler kalıcı olarak silinsin mi?', `${inst.data_dir}\n\nİndirdiğiniz modeller, sohbetler ve ayarlar kalıcı olarak silinecek. Bu işlem geri alınamaz.`, 'Kalıcı olarak sil', true))) return;
+            try {
+              await S.rpc.call('app.uninstall', { purge: purge.checked });
+              toast('FerIDE kapatılıp kaldırılıyor…', 'warn', 10000);
+            } catch (e) { toast(e.message, 'err', 8000); }
+          })();
+        },
+      },
+    ],
+  });
+}
+
 const field = (label, help, control) => h('div', { class: 'field' }, h('div', { class: 'lbl' }, label, help ? h('small', {}, help) : null), control);
 const check = (checked, onChange, text) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e) => onChange(e.target.checked) }), text || '');
 const select = (value, opts, onChange) => {
@@ -51,6 +92,9 @@ function general(body) {
     field('Veri klasörü', S.info?.data_dir, h('div', { class: 'row' },
       h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_path', { path: 'data' }) }, icon('folder'), 'Aç'),
       h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_path', { path: 'logs' }) }, icon('file'), 'Günlükler')))));
+  const installSec = h('div', { class: 'section' }, h('div', { class: 'sh' }, h('h3', {}, 'Kurulum')), h('div', { class: 'status-line' }, icon('loader', 'spin'), 'Okunuyor…'));
+  body.append(installSec);
+  S.rpc.call('app.install_info').then((inst) => renderInstall(installSec, inst)).catch((e) => { installSec.lastChild.textContent = e.message; });
   body.append(h('div', { class: 'section' },
     h('div', { class: 'sh' }, h('h3', {}, 'FerIDE hakkında')),
     h('div', { class: 'kv' },

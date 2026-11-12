@@ -104,18 +104,36 @@ impl Shell {
     /// Ajanın sistem talimatına eklenen kısa not.
     pub fn agent_hint(&self) -> String {
         match self.kind {
-            ShellKind::Bash if cfg!(windows) => "Komutlar Windows üzerinde Git Bash ile çalışır: bash sözdizimi kullan \
-                (ls, grep, cat, &&). Windows yollarını tırnak içinde ve / ile yaz (\"C:/Users/...\"). \
-                Windows programları (where, ipconfig, powershell -Command ...) da çağrılabilir."
-                .into(),
-            ShellKind::PowerShell => "Komutlar PowerShell ile çalışır: bash komutları (grep, cat <<EOF, &&) ÇALIŞMAZ. \
-                PowerShell karşılıklarını kullan (Get-ChildItem, Select-String, Get-Content, ; ile ayır)."
-                .into(),
-            ShellKind::Cmd => "Komutlar cmd.exe ile çalışır.".into(),
-            _ => format!("Komutlar {} ile çalışır.", self.display_name()),
+            ShellKind::Bash if cfg!(windows) => format!(
+                "Komutlar Windows üzerinde Git Bash ile çalışır: bash sözdizimi kullan (ls, grep, cat, &&). Windows \
+                 yollarını tırnak içinde ve / ile yaz (\"C:/Users/...\"). {WINDOWS_NOTE}"
+            ),
+            ShellKind::PowerShell => format!(
+                "Komutlar PowerShell ile çalışır: bash komutları (grep, cat <<EOF, &&) ÇALIŞMAZ. PowerShell karşılıklarını \
+                 kullan (Get-ChildItem, Select-String, Get-Content, ; ile ayır). {WINDOWS_NOTE}"
+            ),
+            ShellKind::Cmd => format!("Komutlar cmd.exe ile çalışır. {WINDOWS_NOTE}"),
+            _ if cfg!(target_os = "macos") => format!(
+                "Komutlar {} ile çalışır (macOS). apt, systemctl, lsblk, free, xdg-open gibi Linux komutları ve Windows \
+                 komutları yok; brew, launchctl, diskutil, vm_stat, open kullan. sudo gereken işleri kullanıcıya sor.",
+                self.display_name()
+            ),
+            _ => format!(
+                "Komutlar {} ile çalışır (Linux). Windows komutları (tasklist, ipconfig, winget, powershell) yok. \
+                 sudo gereken işleri (paket kurma, sistem ayarı) kullanıcıya sor.",
+                self.display_name()
+            ),
         }
     }
 }
+
+/// Windows'ta çalışan ajana: Linux komutlarının olmadığını ve karşılıklarını açıkça söyler.
+const WINDOWS_NOTE: &str = "Bu bir WINDOWS bilgisayar: sudo, apt/yum/pacman, systemctl/service, journalctl, lsblk, \
+free, top, ifconfig/ip, xdg-open/open, pkill/killall gibi Linux/macOS komutları YOK ve çalıştırılmaz. Karşılıkları: program \
+kurmak için `winget install --id <Kimlik> -e`; hizmet, süreç, disk ve olay günlüğü için `powershell -NoProfile -Command \
+\"Get-Service | Get-Process | Get-Volume | Get-WinEvent ...\"`; `tasklist`/`taskkill`; `ipconfig`; `netstat -ano`; \
+dosya ya da adres açmak için open_in_system aracı. Git Bash'teki ps/kill yalnızca bash süreçlerini görür. \
+Yönetici izni gereken işleri kullanıcıya söyle.";
 
 fn find_git_bash(paths: &Paths) -> Option<PathBuf> {
     let mut c = vec![paths.tools().join("git").join("bin").join("bash.exe")];

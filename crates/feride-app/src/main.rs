@@ -4,9 +4,12 @@
 //! `feride serve`         başsız sunucu (tarayıcıdan bağlanılır)
 //! `feride doctor`        bağımlılık ve donanım tanısı
 //! `feride setup [id…]`   eksik bağımlılıkları kurar
+//! `feride install`       kurulum sihirbazı (program ve veri klasörü seçimi)
+//! `feride uninstall`     FerIDE'yi kaldırır
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod installer;
 mod rpc;
 mod server;
 #[cfg(feature = "desktop")]
@@ -43,6 +46,46 @@ enum Cmd {
     Doctor,
     /// Eksik bağımlılıkları kurar (kimlik verilmezse yalnızca zorunlular).
     Setup { ids: Vec<String> },
+    /// FerIDE'yi kurar ya da günceller. Seçenek verilmezse kurulum sihirbazı açılır.
+    Install {
+        /// Program klasörü (feride.exe buraya kopyalanır).
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+        /// Veri klasörü: modeller, araçlar, ses paketi, sohbetler, ayarlar.
+        #[arg(long)]
+        data: Option<std::path::PathBuf>,
+        /// Sihirbazı açmadan kur (verilmeyen klasörler için varsayılanlar).
+        #[arg(long)]
+        yes: bool,
+        /// FerIDE zaten kuruluysa sormadan yerinde güncelle.
+        #[arg(long)]
+        update: bool,
+        /// Masaüstü ve menü kısayolu oluşturma.
+        #[arg(long)]
+        no_shortcuts: bool,
+        /// Komut satırı (PATH) kaydı yapma.
+        #[arg(long)]
+        no_path: bool,
+        /// Kurulumdan sonra FerIDE'yi açma.
+        #[arg(long)]
+        no_launch: bool,
+        /// Pencere açmadan sihirbaz adresini yazdır.
+        #[arg(long, hide = true)]
+        print_url: bool,
+    },
+    /// FerIDE'yi kaldırır (kısayollar, kayıt ve program dosyaları; isteğe bağlı olarak veriler).
+    Uninstall {
+        /// Sormadan kaldır.
+        #[arg(long)]
+        yes: bool,
+        /// Modelleri, sohbetleri, indirilen araçları ve ayarları da sil.
+        #[arg(long)]
+        purge: bool,
+        #[arg(long, hide = true)]
+        wait_pid: Option<u32>,
+        #[arg(long, hide = true)]
+        notify: bool,
+    },
 }
 
 fn attach_console() {
@@ -103,6 +146,32 @@ fn main() {
     if cli.cmd.is_some() {
         attach_console();
     }
+    // Kurulum ve kaldırma veri klasörüne dokunmadan çalışır (kullanıcı henüz yer seçmemiş olabilir).
+    match cli.cmd {
+        Some(Cmd::Install { dir, data, yes, update, no_shortcuts, no_path, no_launch, print_url }) => {
+            let _g = installer::init_logging();
+            std::process::exit(installer::cli_install(installer::InstallArgs {
+                dir,
+                data,
+                yes,
+                update,
+                no_shortcuts,
+                no_path,
+                no_launch,
+                print_url,
+            }));
+        }
+        Some(Cmd::Uninstall { yes, purge, wait_pid, notify }) => {
+            let _g = installer::init_logging();
+            std::process::exit(installer::cli_uninstall(installer::UninstallArgs { yes, purge, wait_pid, notify }));
+        }
+        None if installer::should_offer_install() => {
+            // Kurulmamış bir kopya açıldı (ör. indirilenlerden): önce kurulum sihirbazı.
+            let _g = installer::init_logging();
+            std::process::exit(installer::run_wizard(false, false, false));
+        }
+        _ => {}
+    }
     let paths = Paths::detect();
     let _guard = init_logging(&paths, cli.cmd.is_some());
     std::panic::set_hook(Box::new(|info| {
@@ -112,6 +181,7 @@ fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_name("feride").build().expect("çalışma zamanı");
 
     match cli.cmd {
+        Some(Cmd::Install { .. }) | Some(Cmd::Uninstall { .. }) => unreachable!("yukarıda işlendi"),
         Some(Cmd::Doctor) => rt.block_on(doctor(paths)),
         Some(Cmd::Setup { ids }) => rt.block_on(setup(paths, ids)),
         Some(Cmd::Serve { port, listen, open }) => {
@@ -146,6 +216,12 @@ fn main() {
 }
 
 fn run_desktop(rt: tokio::runtime::Runtime, paths: Paths) {
+    // Eski kurulum betiğiyle kurulmuş kopya: install.json ve "Uygulamalar" kaldırma kaydı arka planda eklenir.
+    if let Some(info) = feride_core::install::running_installed() {
+        if feride_core::install::info_in(&info.install_dir).is_none() {
+            std::thread::spawn(move || feride_core::install::adopt_legacy(&info));
+        }
+    }
     let lock = instance_lock(&paths);
     if lock.is_none() {
         // Zaten açık bir FerIDE var: ona yeni bir pencere aç.
@@ -205,7 +281,7 @@ fn open_window_or_browser(
 ) -> bool {
     #[cfg(feature = "desktop")]
     {
-        match desktop::run(url.clone(), origin, paths.cache().join("webview"), quit, on_exit) {
+        match desktop::run(url.clone(), origin, paths.cache().join("webview"), desktop::WindowSpec::main(), quit, on_exit) {
             Ok(()) => return false,
             Err(e) => tracing::error!("pencere açılamadı ({e}); arayüz tarayıcıda açılıyor"),
         }
@@ -218,6 +294,10 @@ async fn doctor(paths: Paths) {
     let core = Core::new(paths.clone());
     let s = core.settings();
     println!("FerIDE {} ({})", feride_core::DISPLAY_VERSION, feride_core::VERSION);
+    match feride_core::install::running_installed() {
+        Some(i) => println!("Program klasörü: {} (kurulu)", i.install_dir.display()),
+        None => println!("Program klasörü: {} (kurulmadan çalışıyor)", feride_core::install::current_exe_dir().unwrap_or_default().display()),
+    }
     println!("Veri klasörü: {}", paths.data.display());
     println!("Kabuk: {}", feride_core::shell::Shell::detect(&paths, &s.agent.shell).display_name());
     if let Some(sac) = feride_core::winsec::smart_app_control() {

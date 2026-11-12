@@ -9,6 +9,7 @@ pub mod fsops;
 pub mod gguf;
 pub mod hardware;
 pub mod hub;
+pub mod install;
 pub mod llama;
 pub mod llm;
 pub mod mcp;

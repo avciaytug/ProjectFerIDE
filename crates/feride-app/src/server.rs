@@ -36,7 +36,7 @@ pub struct AppState {
     pub desktop: bool,
 }
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+pub(crate) const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
 media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; \
 object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
@@ -61,7 +61,7 @@ pub async fn start(core: Arc<Core>, listen: &str, port: u16, desktop: bool) -> a
     Ok(Started { port, token, quit })
 }
 
-async fn static_handler(uri: Uri) -> Response {
+pub(crate) async fn static_handler(uri: Uri) -> Response {
     let mut path = uri.path().trim_start_matches('/').to_string();
     if path.is_empty() {
         path = "index.html".into();

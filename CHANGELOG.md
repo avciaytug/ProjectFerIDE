@@ -1,5 +1,36 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.8) — Kurulum yerini seçme, kaldırıcı, işletim sistemine uygun komutlar
+
+### Kurulum
+- **Kurulum sihirbazı:** FerIDE artık nereye kurulacağını soruyor. **Program klasörü** ve **veri klasörü** (modeller,
+  llama.cpp, ses paketi, sohbetler, ayarlar) ayrı ayrı seçilir: C:, D: ya da herhangi bir klasör; Linux'ta herhangi bir
+  disk bölümü (`/mnt/...`). Sihirbaz sürücüdeki boş alanı gösterir, seçilen klasördeki mevcut FerIDE verilerini tanır,
+  sürücü kökü / ev / sistem klasörlerini reddeder. Kısayollar ve komut satırından çalıştırma isteğe bağlıdır.
+  **Kur**'a basılana kadar diske hiçbir şey yazılmaz.
+- Kurulum betikleri (`install.ps1`, `install.sh`) paketi doğruladıktan sonra sihirbazı açar; FerIDE zaten kuruluysa
+  bulunduğu yerde sessizce güncellenir. `FERIDE_INSTALL_DIR` / `FERIDE_DATA_DIR` ile sihirbazsız kurulum; masaüstü
+  oturumu olmayan Linux'ta varsayılan konumlar. Betik sonunda kurulan klasörleri yazar.
+- İndirilen `feride.exe` doğrudan çalıştırıldığında da sihirbaz açılır; istenirse **Kurmadan, bu klasörden kullan
+  (taşınabilir)**.
+- Veri klasörü program klasöründeki `install.json`'dan okunur (`FERIDE_HOME` > `install.json` > `~/.feride`).
+- Eski betikle kurulmuş FerIDE'ler bu sürüme güncellenince kendiliğinden kayda geçer ("Uygulamalar" listesine eklenir).
+
+### Kaldırma
+- **FerIDE artık kaldırılabiliyor:** Windows Ayarlar → Uygulamalar → **FerIDE** → **Kaldır**; FerIDE içinde Ayarlar →
+  Genel → Kurulum → **FerIDE'yi kaldır…**; ya da `feride uninstall`. Linux'ta uygulama menüsünde "FerIDE'yi kaldır".
+- Program, kısayollar, PATH girdisi ve kaldırma kaydı silinir. Modeller ve sohbetler isteğe bağlı silinir
+  (`--purge`); silinirken yalnızca FerIDE'nin oluşturduğu dosyalar silinir, veri klasörüne sizin koyduğunuz dosyalara
+  dokunulmaz ve listelenir. Çalışan FerIDE ve motorları önce kapatılır.
+- Kullanıcı PATH'i ham hâliyle düzenlenir: `%DEĞİŞKEN%` girdileri, değer türü ve diğer girdiler korunur.
+
+### Ajan
+- **Windows'ta Linux komutu çalıştırma düzeltildi.** Ajan `sudo`, `apt`, `systemctl`, `ps aux`, `ifconfig`,
+  `xdg-open` gibi bu bilgisayarda olmayan komutları çalıştırmaya kalkarsa komut hiç çalıştırılmaz; Windows karşılığı
+  (winget, Get-Service, tasklist/taskkill, ipconfig, netstat, open_in_system…) söylenip komutu yeniden yazması istenir.
+  Linux/macOS'ta Windows'a özgü komutlar için de aynısı geçerli. "command not found" / "tanınmıyor" hatalarına da ipucu
+  eklenir; sistem istemi her kabuk için olmayan komutları ve karşılıklarını listeler.
+
 ## beta v5.4 (5.4.0-beta.7) — Sadeleştirme
 
 - Sol çubuktaki **Ara** paneli (büyüteç) ve `Ctrl+Shift+F` kısayolu kaldırıldı. Çalışma alanında arama gerektiğinde

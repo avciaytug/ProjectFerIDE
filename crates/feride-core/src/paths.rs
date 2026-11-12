@@ -2,7 +2,8 @@
 //!
 //! Veri dizini v5.3.8 ile aynıdır (`~/.feride`); böylece indirilmiş modeller,
 //! skill'ler, MCP ayarları ve llama.cpp kurulumu yeni sürümde de kullanılır.
-//! `FERIDE_HOME` ortam değişkeniyle değiştirilebilir (testler, taşınabilir kurulum).
+//! Kurulumda başka bir yer seçildiyse program klasöründeki `install.json` onu gösterir (bkz. `install`);
+//! `FERIDE_HOME` ortam değişkeni ikisini de geçersiz kılar (testler, taşınabilir kullanım).
 
 use std::path::{Path, PathBuf};
 
@@ -15,9 +16,7 @@ pub struct Paths {
 impl Paths {
     pub fn detect() -> Self {
         let home = home_dir();
-        let data = std::env::var_os("FERIDE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".feride"));
+        let data = crate::install::resolve_data_dir();
         let p = Self { home, data };
         p.ensure();
         p

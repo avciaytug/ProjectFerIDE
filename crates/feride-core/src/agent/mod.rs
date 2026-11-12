@@ -5,6 +5,7 @@
 //!         todos | usage | turn_saved | done
 
 pub mod context;
+pub mod oscmd;
 pub mod permissions;
 pub mod prompt;
 pub mod tools;
