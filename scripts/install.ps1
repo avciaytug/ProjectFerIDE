@@ -24,6 +24,8 @@ function Format-PathArg([string]$p) { '"' + ($p -replace '(\\+)$', '$1$1') + '"'
 
 Write-Host "FerIDE indiriliyor..." -ForegroundColor Cyan
 $releases = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases?per_page=20"
+# GitHub listeyi sürüm adına göre sıralayabiliyor ("beta.9" > "beta.10"); en yeni yayın en başta olsun.
+$releases = @($releases | Sort-Object { [datetime]$_.published_at } -Descending)
 # ARM64 Windows x64 uygulamalarını da çalıştırır: ARM64 paketi yoksa x64 kullanılır.
 $names = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { @('feride-windows-arm64.zip', 'feride-windows-x64.zip') } else { @('feride-windows-x64.zip') }
 $release = $null

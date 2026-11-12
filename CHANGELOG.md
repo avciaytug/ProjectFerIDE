@@ -9,6 +9,8 @@
 - **Yarım kalan llama.cpp kurulumu:** arşiv açıldıktan sonra klasör yerine taşınamazsa (Windows'ta virüs taraması
   yeni dosyaları birkaç saniye kilitleyebilir) kurulum yarım kalıyordu. Taşıma artık yeniden denenir, olmazsa
   kopyalanır; daha önce yarım kalmış kurulum FerIDE açılırken kendiliğinden tamamlanır.
+- **Kurulum betikleri en yeni sürümü seçiyor:** GitHub sürüm listesini ada göre sıraladığı için `install.ps1` /
+  `install.sh` beta.10 yerine beta.9'u indiriyordu; artık yayın tarihine göre seçiliyor.
 
 ## beta v5.4 (5.4.0-beta.9) — Kurulum yerini seçme, kaldırıcı (beta.8'in tamamlanmış hâli)
 

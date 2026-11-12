@@ -56,8 +56,11 @@ if [ "$PLAT" = linux ]; then
 fi
 
 say "FerIDE sürümü sorgulanıyor…"
+# GitHub listeyi sürüm adına göre sıralayabiliyor ("beta.9" > "beta.10"): her paketi kendi sürümünün yayın tarihiyle
+# eşleyip en yenisini seç (published_at, aynı sürümün assets listesinden önce gelir).
 URL="$(curl -fsSL -H 'User-Agent: FerIDE-installer' "https://api.github.com/repos/$REPO/releases?per_page=20" \
-  | grep -o "\"browser_download_url\": *\"[^\"]*/$ASSET\"" | head -1 | sed 's/.*"\(https[^"]*\)"/\1/')"
+  | grep -o "\"published_at\": *\"[^\"]*\"\|\"browser_download_url\": *\"[^\"]*/$ASSET\"" \
+  | awk -F'"' '/published_at/ { t = $4; next } { print t, $4 }' | sort -r | head -1 | cut -d' ' -f2)"
 [ -n "$URL" ] || { echo "Bu platform için sürüm bulunamadı ($ASSET)."; exit 1; }
 
 TMP="$(mktemp -d)"
