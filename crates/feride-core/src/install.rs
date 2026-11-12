@@ -148,9 +148,32 @@ pub fn resolve_data_dir() -> PathBuf {
         .unwrap_or_else(default_data_dir)
 }
 
+/// Yolun gerçek hâli; yol (henüz) yoksa var olan en derin üst klasörü gerçek yoluna çevrilip kalanı eklenir.
+/// Böylece macOS'ta /var ↔ /private/var, Windows'ta 8.3 kısa adlar (RUNNER~1) karşılaştırmayı bozmaz.
+fn canonical_lenient(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut cur = p;
+    loop {
+        if let Ok(c) = dunce::canonicalize(cur) {
+            let mut out = c;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return normalize(&out);
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return normalize(p),
+        }
+    }
+}
+
 pub fn same_path(a: &Path, b: &Path) -> bool {
-    let a = normalize(&dunce::canonicalize(a).unwrap_or_else(|_| a.to_path_buf()));
-    let b = normalize(&dunce::canonicalize(b).unwrap_or_else(|_| b.to_path_buf()));
+    let a = canonical_lenient(a);
+    let b = canonical_lenient(b);
     if cfg!(windows) {
         let f = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
         f(&a) == f(&b)
@@ -161,8 +184,8 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
 
 /// `child`, `dir` klasörünün içinde mi (kendisi değil)? Windows'ta büyük/küçük harf ayrımı yapılmaz.
 pub fn is_inside(child: &Path, dir: &Path) -> bool {
-    let c = normalize(&dunce::canonicalize(child).unwrap_or_else(|_| child.to_path_buf()));
-    let d = normalize(&dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()));
+    let c = canonical_lenient(child);
+    let d = canonical_lenient(dir);
     if cfg!(windows) {
         let f = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
         let (c, d) = (f(&c), f(&d));
@@ -274,8 +297,12 @@ fn stop_matching(matches: impl Fn(&Path) -> bool) -> usize {
     };
     let sys = find();
     let mut n = 0;
+    // Linux'ta sysinfo iş parçacıklarını da ayrı süreç olarak listeler (`thread_kind`). Bu sürecin kendi iş
+    // parçacığı "aynı programı çalıştıran başka süreç" sanılıp öldürülürse SIGKILL bütün süreci kapatır; iş
+    // parçacıkları atlanır, ana süreci kapatmak zaten hepsini kapatır.
+    let target = |pid: &sysinfo::Pid, p: &sysinfo::Process| pid.as_u32() != me && p.thread_kind().is_none() && p.exe().is_some_and(&matches);
     for (pid, p) in sys.processes() {
-        if pid.as_u32() != me && p.exe().is_some_and(&matches) && p.kill() {
+        if target(pid, p) && p.kill() {
             n += 1;
         }
     }
@@ -283,7 +310,7 @@ fn stop_matching(matches: impl Fn(&Path) -> bool) -> usize {
         for _ in 0..50 {
             std::thread::sleep(Duration::from_millis(100));
             let sys = find();
-            if !sys.processes().iter().any(|(pid, p)| pid.as_u32() != me && p.exe().is_some_and(&matches)) {
+            if !sys.processes().iter().any(|(pid, p)| target(pid, p)) {
                 break;
             }
         }
