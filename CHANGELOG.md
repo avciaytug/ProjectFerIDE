@@ -1,5 +1,18 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.11) — Çalışan ROCm seçeneği, "Kur / güncelle" düzeltmesi
+
+- **"Kur / güncelle" gerçekten kuruyor:** Model Merkezi'ndeki düğme llama.cpp zaten kuruluysa hiçbir şey yapmıyordu;
+  başka bir derleme (ROCm, CUDA…) seçilse de eskisi kalıyordu. Artık seçilen derleme her seferinde kurulur ve sonuç
+  (kuruldu / neden kurulamadı) ekranda bildirilir.
+- **Windows'ta ROCm:** llama.cpp'nin kendi Windows ROCm paketi hipBLAS/rocBLAS kitaplıklarını içermediği için GPU'yu
+  görmüyordu. FerIDE artık AMD Lemonade projesinin GPU ailesine özel (ör. Radeon 8060S → gfx1151), kitaplıkları içeren
+  ve donanımda doğrulanmış derlemesini kurar; paket SHA-256 ile doğrulanır.
+- **Kurulumdan sonra GPU denetimi:** elle seçilen GPU derlemesi (ROCm, CUDA, Vulkan) ekran kartını görmüyorsa kurulmaz,
+  önceki derleme korunur ve nedeni söylenir — model sessizce işlemcide çalışmaz.
+- Ölçüm (Radeon 8060S, Qwen 27B Q4): ROCm istem okumada ~%30 hızlı, yanıt üretmede Vulkan %10–25 hızlı. Otomatik
+  seçim Vulkan olarak kalıyor.
+
 ## beta v5.4 (5.4.0-beta.10) — Model yeniden GPU'da çalışıyor
 
 - **GPU algılama düzeltildi:** model başlatılırken GPU listesi bir kerelik boş gelirse (sürücü o an meşgulken)

@@ -97,6 +97,9 @@ pub fn exe(name: &str) -> String {
     }
 }
 
+/// Windows ROCm derlemeleri: AMD Lemonade projesi (GPU ailesine özel, hipBLAS/rocBLAS dahil).
+const LEMONADE_ROCM_REPO: &str = "lemonade-sdk/llamacpp-rocm";
+
 /// llama.cpp kurulurken arşivin açıldığı geçici klasörün son eki.
 const STAGING_SUFFIX: &str = ".kuruluyor";
 
@@ -276,7 +279,7 @@ impl Deps {
         v.push(DepStatus {
             id: "llama".into(),
             name: "llama.cpp (llama-server)".into(),
-            description: "Yerel modelleri çalıştıran motor. GPU için Vulkan (AMD/Intel/NVIDIA), istenirse CUDA.".into(),
+            description: "Yerel modelleri çalıştıran motor. GPU için Vulkan (AMD/Intel/NVIDIA), istenirse CUDA veya ROCm.".into(),
             required: true,
             installed: llama.is_some(),
             version: llama.as_ref().and_then(|p| {
@@ -517,6 +520,12 @@ impl Deps {
 
     /// Eksik olanları kurar: önce yönetici gerektirmeyenler, en sonda (gerekirse) TEK yönetici onayı.
     pub async fn install_missing(&self, settings: &Settings, ids: &[String]) -> Vec<(String, Result<String, String>)> {
+        self.install_selected(settings, ids, false).await
+    }
+
+    /// `force`: istenen bileşenler kurulu olsa da yeniden kurulur ("Kur / güncelle" düğmesi; yoksa kurulu llama.cpp
+    /// atlanır ve seçilen derleme hiç kurulmazdı).
+    pub async fn install_selected(&self, settings: &Settings, ids: &[String], force: bool) -> Vec<(String, Result<String, String>)> {
         let status = self.check(settings);
         let wanted = |d: &DepStatus| ids.is_empty() && d.required || ids.contains(&d.id);
         let mut results = vec![];
@@ -524,7 +533,7 @@ impl Deps {
         let mut admin_ids = vec![];
         for id in order {
             let Some(d) = status.iter().find(|d| d.id == id) else { continue };
-            if d.installed || !wanted(d) {
+            if (d.installed && !(force && ids.contains(&d.id))) || !wanted(d) {
                 continue;
             }
             if d.needs_admin {
@@ -612,13 +621,40 @@ impl Deps {
             }
             b => b.to_string(),
         };
+        // Kullanıcı bir GPU derlemesini açıkça seçtiyse, kurulan derleme GPU'yu görmüyorsa kurulum başarısız sayılır
+        // (yoksa model sessizce işlemcide, ~3 kat yavaş çalışır) ve önceki derleme korunur.
+        let require_gpu = !matches!(backend_pref, "auto" | "" | "cpu");
+        let is_hip = matches!(backend.as_str(), "hip" | "rocm");
         self.progress("llama", "llama.cpp sürümü sorgulanıyor", 0, 0);
-        let rel = self.latest_llama_release().await?;
-        let assets = pick_llama_assets(&rel.assets, os, std::env::consts::ARCH, &backend);
+        // Windows'ta llama.cpp'nin kendi ROCm paketi hipBLAS/rocBLAS kitaplıklarını içermiyor (AMD HIP SDK ister) ve GPU'yu
+        // görmüyor; AMD'nin Lemonade projesinin GPU ailesine özel, kitaplıkları içeren ve donanımda doğrulanmış
+        // derlemesi kullanılır.
+        let (tag, assets, checksums, label) = if os == "windows" && is_hip {
+            let family = self.rocm_family_here().await?;
+            let rel = self.github_latest(LEMONADE_ROCM_REPO).await?;
+            let want = format!("-windows-rocm-{}-x64.zip", family.to_lowercase());
+            let a = rel
+                .assets
+                .iter()
+                .find(|a| a.name.to_lowercase().ends_with(&want))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Lemonade'de bu GPU ailesi ({family}) için Windows ROCm derlemesi yok. Vulkan'ı seçin."))?;
+            let sums = match rel.assets.iter().find(|a| a.name == "checksums.txt") {
+                Some(c) => self.http.get(&c.browser_download_url).send().await?.error_for_status()?.text().await?,
+                None => anyhow::bail!("Lemonade sürümünde checksums.txt yok; doğrulanamayan derleme kurulmaz."),
+            };
+            let label = format!("{} (ROCm, Lemonade {family})", rel.tag_name);
+            (rel.tag_name, vec![a], Some(sums), label)
+        } else {
+            let rel = self.latest_llama_release().await?;
+            let assets = pick_llama_assets(&rel.assets, os, std::env::consts::ARCH, &backend);
+            let label = format!("{} ({backend})", rel.tag_name);
+            (rel.tag_name, assets, None, label)
+        };
         if assets.is_empty() {
             anyhow::bail!("Bu platform için llama.cpp derlemesi bulunamadı ({os}, {backend}).");
         }
-        let dir_name = format!("{}-{}", rel.tag_name, backend);
+        let dir_name = format!("{tag}-{backend}");
         let root = self.paths.llama_root();
         let target = root.join(&dir_name);
         let staging = root.join(format!("{dir_name}{STAGING_SUFFIX}"));
@@ -626,7 +662,23 @@ impl Deps {
         tokio::fs::create_dir_all(&staging).await?;
         for a in &assets {
             let file = self.paths.cache().join(&a.name);
-            self.download("llama", &a.browser_download_url, &file, &format!("llama.cpp {}", rel.tag_name)).await?;
+            self.download("llama", &a.browser_download_url, &file, &format!("llama.cpp {label}")).await?;
+            if let Some(sums) = &checksums {
+                let expected = sums
+                    .lines()
+                    .find_map(|l| {
+                        let mut it = l.split_whitespace();
+                        let (h, n) = (it.next()?, it.next()?);
+                        (n.trim_start_matches('*') == a.name).then(|| h.to_lowercase())
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("{} için sağlama toplamı yok", a.name))?;
+                let f = file.clone();
+                let actual = tokio::task::spawn_blocking(move || sha256_file(&f)).await??;
+                if actual != expected {
+                    let _ = tokio::fs::remove_file(&file).await;
+                    anyhow::bail!("{} doğrulanamadı (SHA-256 uyuşmuyor).", a.name);
+                }
+            }
             self.progress("llama", "Arşiv açılıyor", 0, 0);
             let (f, s) = (file.clone(), staging.clone());
             tokio::task::spawn_blocking(move || extract_archive(&f, &s)).await??;
@@ -656,7 +708,23 @@ impl Deps {
         // Çalışıyor mu?
         let ver = self.version_of(&server, "--version");
         if ver.is_none() {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
             anyhow::bail!("llama-server kuruldu ama çalıştırılamadı (eksik sürücü ya da çalışma zamanı olabilir).");
+        }
+        if require_gpu {
+            self.progress("llama", "GPU denetleniyor", 0, 0);
+            let gpus = crate::hardware::list_gpus(&self.paths, &server).await;
+            if gpus.is_empty() {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                let hint = if is_hip {
+                    "ROCm bu GPU'yu ya da sürücüyü desteklemiyor olabilir; AMD sürücüsünü güncelleyin veya Vulkan'ı seçin."
+                } else if backend == "cuda" {
+                    "NVIDIA sürücüsünü güncelleyin veya Vulkan'ı seçin."
+                } else {
+                    "Ekran kartı sürücüsünü güncelleyin."
+                };
+                anyhow::bail!("llama.cpp {label} bu bilgisayarda GPU'yu göremedi; kurulmadı, önceki derleme kullanılmaya devam ediyor. {hint}");
+            }
         }
         let (from, to) = (staging.clone(), target.clone());
         tokio::task::spawn_blocking(move || move_dir_retry(&from, &to, 20))
@@ -666,11 +734,40 @@ impl Deps {
         let current = PathBuf::from(&dir_name).join(rel_dir);
         crate::util::write_atomic(&root.join("current.txt"), current.to_string_lossy().as_bytes())?;
         self.update_state(|s| {
-            s.llama_tag = Some(rel.tag_name.clone());
+            s.llama_tag = Some(label.clone());
             s.llama_backend = Some(backend.clone());
         });
         self.cleanup_old_llama(&dir_name);
-        Ok(format!("llama.cpp {} ({backend}) kuruldu.", rel.tag_name))
+        Ok(format!("llama.cpp {label} kuruldu."))
+    }
+
+    /// Bu bilgisayardaki AMD GPU'nun ROCm ailesi: önce kurulu llama-server'ın gördüğü GPU adı, yoksa Windows'un
+    /// ekran kartı listesi.
+    async fn rocm_family_here(&self) -> anyhow::Result<&'static str> {
+        let mut names: Vec<String> = vec![];
+        if let Some(server) = find_llama_server(&self.paths, &Settings::default()) {
+            names.extend(crate::hardware::list_gpus(&self.paths, &server).await.into_iter().map(|g| g.name));
+        }
+        #[cfg(windows)]
+        if names.is_empty() {
+            let mut cmd = crate::proc::command(
+                &self.paths,
+                "powershell.exe",
+                &["-NoProfile".into(), "-Command".into(), "(Get-CimInstance Win32_VideoController).Name".into()],
+            );
+            if let Ok((_, out, _, _)) = crate::proc::run_capture(&mut cmd, Duration::from_secs(30)).await {
+                names.extend(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
+            }
+        }
+        names
+            .iter()
+            .find_map(|n| crate::hardware::rocm_family(n))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ROCm derlemesi için desteklenen bir AMD GPU bulunamadı ({}). Vulkan'ı seçin.",
+                    if names.is_empty() { "GPU yok".to_string() } else { names.join(", ") }
+                )
+            })
     }
 
     /// Eski sürüm klasörlerini siler (çalışan sürüm Windows'ta kilitliyse sessizce atlanır).

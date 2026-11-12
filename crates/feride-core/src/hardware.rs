@@ -95,6 +95,49 @@ pub fn parse_list_devices(out: &str) -> Vec<GpuDevice> {
         .collect()
 }
 
+/// AMD GPU adından ROCm (gfx) ailesi: Lemonade'in ROCm derlemeleri GPU ailesine özel yayınlanır
+/// (`llama-…-windows-rocm-gfx1151-x64.zip`). Bilinmeyen GPU için `None`.
+pub fn rocm_family(gpu_name: &str) -> Option<&'static str> {
+    let n = gpu_name.to_lowercase();
+    if !n.contains("radeon") && !n.contains("amd") {
+        return None;
+    }
+    let has = |xs: &[&str]| xs.iter().any(|x| n.contains(x));
+    // Tümleşik (APU) GPU'lar: adlarında model numarası var.
+    if has(&["8060s", "8050s", "8040s"]) {
+        return Some("gfx1151"); // Strix Halo
+    }
+    if has(&["890m", "880m"]) {
+        return Some("gfx1150"); // Strix Point
+    }
+    if has(&["860m", "840m", "820m"]) {
+        return Some("gfx1152"); // Krackan Point
+    }
+    if has(&["780m", "760m", "740m"]) {
+        return Some("gfx110X"); // Phoenix / Hawk Point (gfx1103)
+    }
+    if has(&["680m", "660m", "610m"]) {
+        return Some("gfx103X"); // Rembrandt / Raphael (gfx1035/1036)
+    }
+    // Ayrık ekran kartları: RX 9000 → RDNA4, RX 7000 → RDNA3, RX 6000 → RDNA2.
+    static RX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"rx\s*([5-9])\d{3}").unwrap());
+    if let Some(c) = RX.captures(&n) {
+        return match &c[1] {
+            "9" => Some("gfx120X"),
+            "7" => Some("gfx110X"),
+            "6" => Some("gfx103X"),
+            _ => None,
+        };
+    }
+    if has(&["ai pro r9700", "ai pro r9600"]) {
+        return Some("gfx120X");
+    }
+    if has(&["pro w7", "pro w7900", "pro w7800"]) {
+        return Some("gfx110X");
+    }
+    None
+}
+
 /// RAM ve işlemci bilgisi (hızlı, süreç içinde).
 pub fn ram_and_cpu() -> (u64, u64, usize, String) {
     let mut sys = sysinfo::System::new();
@@ -137,7 +180,7 @@ pub async fn llama_flags(paths: &Paths, server: &Path) -> BTreeSet<String> {
 /// GPU'ları `llama-server --list-devices` ile listeler. Sürücü o an meşgulse (az önce kapatılan bir modelin
 /// belleği bırakılırken, Windows'ta virüs taraması sürerken…) liste bir kerelik boş ya da eksik gelebilir;
 /// yanlışlıkla "GPU yok" deyip modeli işlemcide (10 kat yavaş) başlatmamak için birkaç kez denenir.
-async fn list_gpus(paths: &Paths, server: &Path) -> Vec<GpuDevice> {
+pub async fn list_gpus(paths: &Paths, server: &Path) -> Vec<GpuDevice> {
     const ATTEMPTS: u32 = 3;
     for attempt in 1..=ATTEMPTS {
         let mut cmd = crate::proc::command(paths, &server.to_string_lossy(), &["--list-devices".to_string()]);
@@ -228,6 +271,23 @@ fn linux_amd_apu_limits(ram_total: u64) -> Option<(u64, u64)> {
     }
     #[cfg(not(target_os = "linux"))]
     None
+}
+
+#[cfg(test)]
+mod rocm_tests {
+    use super::rocm_family;
+
+    #[test]
+    fn families() {
+        assert_eq!(rocm_family("AMD Radeon(TM) 8060S Graphics"), Some("gfx1151"));
+        assert_eq!(rocm_family("AMD Radeon 890M Graphics"), Some("gfx1150"));
+        assert_eq!(rocm_family("AMD Radeon(TM) 780M"), Some("gfx110X"));
+        assert_eq!(rocm_family("AMD Radeon RX 7900 XTX"), Some("gfx110X"));
+        assert_eq!(rocm_family("AMD Radeon RX 9070 XT"), Some("gfx120X"));
+        assert_eq!(rocm_family("AMD Radeon RX 6800"), Some("gfx103X"));
+        assert_eq!(rocm_family("NVIDIA GeForce RTX 4090"), None);
+        assert_eq!(rocm_family("Intel(R) Arc(TM) Graphics"), None);
+    }
 }
 
 #[cfg(test)]

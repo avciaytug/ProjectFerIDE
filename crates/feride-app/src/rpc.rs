@@ -136,10 +136,11 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
         }
         "setup.install" => {
             let ids: Vec<String> = serde_json::from_value(p["ids"].clone()).unwrap_or_default();
+            let force = p["force"].as_bool().unwrap_or(false);
             let c = Arc::clone(core);
             tokio::spawn(async move {
                 let s = c.settings();
-                let results = c.deps.install_missing(&s, &ids).await;
+                let results = c.deps.install_selected(&s, &ids, force).await;
                 let list: Vec<Value> = results
                     .into_iter()
                     .map(|(id, r)| match r {

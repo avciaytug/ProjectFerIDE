@@ -150,7 +150,29 @@ function renderRun() {
   const ctxSel = h('select', {}, [[0, 'Otomatik'], [8192, '8K'], [16384, '16K'], [32768, '32K'], [65536, '64K'], [131072, '128K'], [262144, '256K']].map(([v, l]) => h('option', { value: v, selected: Number(ms.context) === v }, l)));
   ctxSel.onchange = () => saveSettings({ model: { context: Number(ctxSel.value) } }).then(renderRun);
   const backend = h('select', {}, [['auto', 'Otomatik'], ['vulkan', 'Vulkan (AMD/Intel/NVIDIA)'], ['cuda', 'CUDA (NVIDIA)'], ['hip', 'ROCm/HIP (AMD)'], ['cpu', 'Yalnızca CPU'], ['metal', 'Metal (Apple)']].map(([v, l]) => h('option', { value: v, selected: ms.backend === v }, l)));
-  backend.onchange = () => saveSettings({ model: { backend: backend.value } });
+  backend.onchange = () => saveSettings({ model: { backend: backend.value } }).then(renderRun);
+  const backendHint = {
+    auto: 'Windows/Linux\'ta Vulkan (NVIDIA varsa CUDA), macOS\'ta Metal.',
+    hip: 'AMD için. Windows\'ta AMD Lemonade\'in GPU\'nuza özel derlemesi kurulur. ROCm istemi daha hızlı okur, Vulkan yanıtı genelde daha hızlı üretir.',
+    cuda: 'NVIDIA ekran kartları için; ~700 MB.',
+  }[ms.backend];
+  let installing = false;
+  const installLlama = async (btn) => {
+    if (installing) return;
+    installing = true;
+    btn.disabled = true;
+    const done = new Promise((resolve) => {
+      const off = S.rpc.on('setup.done', (ev) => { if (ev.id === 'llama') { off?.(); resolve(ev); } });
+    });
+    try {
+      await S.rpc.call('setup.install', { ids: ['llama'], force: true });
+      toast('llama.cpp kuruluyor… (ilerleme Kurulum sayfasında)');
+      const ev = await done;
+      toast(ev.message, ev.ok ? 'ok' : 'err', ev.ok ? 6000 : 15000);
+    } catch (e) { toast(e.message, 'err'); }
+    installing = false;
+    btn.disabled = false;
+  };
   box.append(h('div', { class: 'section' },
     h('div', { class: 'sh' }, h('h3', {}, 'Çalıştırma')),
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'Yerleşim', h('small', {}, 'GPU/RAM kullanımı')),
@@ -164,7 +186,8 @@ function renderRun() {
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'Bağlam boyutu', h('small', {}, 'Ajan için en az 16K önerilir')), ctxSel),
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'Açılışta başlat'), h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: ms.auto_start, onchange: (e) => saveSettings({ model: { auto_start: e.target.checked } }) }), 'Seçili modeli FerIDE açılınca yükle')),
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'llama.cpp derlemesi', h('small', {}, 'Değiştirince yeniden kurun')), h('div', { class: 'row' }, backend,
-      h('button', { class: 'btn sm', onclick: async () => { await S.rpc.call('setup.install', { ids: ['llama'] }); toast('llama.cpp en son sürüme güncelleniyor (Kurulum sayfasından izleyebilirsiniz).'); } }, icon('refresh'), 'Kur / güncelle')))));
+      h('button', { class: 'btn sm', onclick: (e) => installLlama(e.currentTarget) }, icon('refresh'), 'Kur / güncelle'))),
+    backendHint ? h('div', { class: 'tiny muted' }, backendHint) : null));
 }
 
 function renderDownloads() {
