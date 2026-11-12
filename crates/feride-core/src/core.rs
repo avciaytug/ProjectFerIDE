@@ -47,6 +47,7 @@ impl Core {
             let _ = settings.save(&paths.config_file());
         }
         let deps = Deps::new(paths.clone(), events.clone());
+        deps.recover_staged_llama();
         crate::resources::install(&paths, &deps);
         let memory = match MemoryStore::open(&paths.memory_db()) {
             Ok(m) => {

@@ -1,5 +1,15 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.10) — Model yeniden GPU'da çalışıyor
+
+- **GPU algılama düzeltildi:** model başlatılırken GPU listesi bir kerelik boş gelirse (sürücü o an meşgulken)
+  FerIDE "GPU yok" deyip modeli işlemcide başlatıyordu: 27B modelde ~3,5 token/sn. Artık liste birkaç kez, arada
+  beklenerek yeniden sorulur; bu bilgisayarda daha önce GPU görüldüyse boş liste "GPU yok" sayılmaz. Aynı model
+  Radeon 8060S'te tamamen GPU'da ~11 token/sn. Başarısız denemeler günlüğe yazılır.
+- **Yarım kalan llama.cpp kurulumu:** arşiv açıldıktan sonra klasör yerine taşınamazsa (Windows'ta virüs taraması
+  yeni dosyaları birkaç saniye kilitleyebilir) kurulum yarım kalıyordu. Taşıma artık yeniden denenir, olmazsa
+  kopyalanır; daha önce yarım kalmış kurulum FerIDE açılırken kendiliğinden tamamlanır.
+
 ## beta v5.4 (5.4.0-beta.9) — Kurulum yerini seçme, kaldırıcı (beta.8'in tamamlanmış hâli)
 
 beta.8'in derlemesi yarım kalmıştı (yalnızca Linux paketi yayınlandı ve onda `feride uninstall` çalışmıyordu). Bu

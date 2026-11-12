@@ -134,20 +134,54 @@ pub async fn llama_flags(paths: &Paths, server: &Path) -> BTreeSet<String> {
     }
 }
 
-pub async fn probe(paths: &Paths, server: Option<&Path>) -> HardwareInfo {
-    let (total, avail, cores, cpu_name) = tokio::task::spawn_blocking(ram_and_cpu).await.unwrap_or((16 << 30, 8 << 30, 4, String::new()));
-    let mut gpus = vec![];
-    if let Some(server) = server.filter(|_| !crate::winsec::engine_blocked()) {
+/// GPU'ları `llama-server --list-devices` ile listeler. Sürücü o an meşgulse (az önce kapatılan bir modelin
+/// belleği bırakılırken, Windows'ta virüs taraması sürerken…) liste bir kerelik boş ya da eksik gelebilir;
+/// yanlışlıkla "GPU yok" deyip modeli işlemcide (10 kat yavaş) başlatmamak için birkaç kez denenir.
+async fn list_gpus(paths: &Paths, server: &Path) -> Vec<GpuDevice> {
+    const ATTEMPTS: u32 = 3;
+    for attempt in 1..=ATTEMPTS {
         let mut cmd = crate::proc::command(paths, &server.to_string_lossy(), &["--list-devices".to_string()]);
-        if let Ok((code, out, err, _)) = crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(25)).await {
-            let all = format!("{out}\n{err}");
-            if code != Some(0) {
-                crate::winsec::note_engine_result(code, &all);
+        let (code, all, timed_out) = match crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(30)).await {
+            Ok((code, out, err, timed_out)) => (code, format!("{out}\n{err}"), timed_out),
+            Err(e) => (None, format!("başlatılamadı: {e}"), false),
+        };
+        if code.is_some_and(|c| c != 0) && crate::winsec::note_engine_result(code, &all) {
+            return vec![];
+        }
+        let mut gpus = parse_list_devices(&all);
+        gpus.retain(|g| !g.name.to_lowercase().contains("llvmpipe"));
+        // Liste sorunsuz geldi ama boşsa ve bu bilgisayarda daha önce hiç GPU görülmediyse gerçekten GPU yoktur;
+        // her ölçümde boşuna beklemeyelim. Daha önce görüldüyse boş liste geçici bir sürücü durumudur.
+        let seen_marker = paths.cache().join("gpu-seen");
+        let clean_empty = code == Some(0) && !timed_out && all.contains("Available devices") && !seen_marker.is_file();
+        if !gpus.is_empty() {
+            let _ = std::fs::create_dir_all(paths.cache());
+            let _ = std::fs::write(&seen_marker, gpus[0].name.as_bytes());
+        }
+        if !gpus.is_empty() || clean_empty {
+            if attempt > 1 {
+                tracing::info!("GPU {attempt}. denemede bulundu: {} adet", gpus.len());
             }
-            gpus = parse_list_devices(&all);
+            return gpus;
+        }
+        tracing::warn!(
+            "GPU listesi alınamadı (deneme {attempt}/{ATTEMPTS}, çıkış {code:?}{}): {}",
+            if timed_out { ", zaman aşımı" } else { "" },
+            crate::util::truncate_end(all.trim(), 300)
+        );
+        if attempt < ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(1500 * attempt as u64)).await;
         }
     }
-    gpus.retain(|g| !g.name.to_lowercase().contains("llvmpipe"));
+    vec![]
+}
+
+pub async fn probe(paths: &Paths, server: Option<&Path>) -> HardwareInfo {
+    let (total, avail, cores, cpu_name) = tokio::task::spawn_blocking(ram_and_cpu).await.unwrap_or((16 << 30, 8 << 30, 4, String::new()));
+    let gpus = match server.filter(|_| !crate::winsec::engine_blocked()) {
+        Some(server) => list_gpus(paths, server).await,
+        None => vec![],
+    };
 
     let linux_apu = linux_amd_apu_limits(total);
     let unified = cfg!(target_os = "macos") || linux_apu.is_some() || gpus.iter().any(|g| UNIFIED_GPU.is_match(&g.name));

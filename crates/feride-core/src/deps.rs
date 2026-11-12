@@ -97,6 +97,45 @@ pub fn exe(name: &str) -> String {
     }
 }
 
+/// llama.cpp kurulurken arşivin açıldığı geçici klasörün son eki.
+const STAGING_SUFFIX: &str = ".kuruluyor";
+
+/// Klasörü yeni adına taşır. Windows'ta virüs tarayıcısı yeni açılmış .exe/.dll dosyalarını birkaç saniye
+/// kilitleyebildiği için yeniden dener; olmazsa kopyalar (geçici klasör sonra silinmeye çalışılır).
+fn move_dir_retry(from: &Path, to: &Path, attempts: u32) -> std::io::Result<()> {
+    let mut last = None;
+    for i in 0..attempts {
+        let _ = std::fs::remove_dir_all(to);
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::debug!("{} taşınamadı (deneme {}): {e}", from.display(), i + 1);
+                last = Some(e);
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    }
+    let e = last.unwrap_or_else(|| std::io::Error::other("taşınamadı"));
+    tracing::warn!("{} → {} taşınamadı ({e}); kopyalanıyor", from.display(), to.display());
+    let _ = std::fs::remove_dir_all(to);
+    copy_dir_all(from, to)?;
+    let _ = std::fs::remove_dir_all(from);
+    Ok(())
+}
+
+fn copy_dir_all(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)?.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            copy_dir_all(&p, &to.join(e.file_name()))?;
+        } else {
+            std::fs::copy(&p, to.join(e.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Kullanılacak llama-server: ayarlardaki yol → FerIDE kurulumu → eski düz kurulum → PATH.
 pub fn find_llama_server(paths: &Paths, settings: &Settings) -> Option<PathBuf> {
     if let Some(p) = settings.model.server_path.as_ref().filter(|p| p.is_file()) {
@@ -113,15 +152,17 @@ pub fn find_llama_server(paths: &Paths, settings: &Settings) -> Option<PathBuf> 
     if flat.is_file() {
         return Some(flat);
     }
-    let mut found: Vec<(std::time::SystemTime, PathBuf)> = vec![];
+    // (yarım kalmış kurulum, tamamlanmış olanlardan sonra gelir)
+    let mut found: Vec<(bool, std::time::SystemTime, PathBuf)> = vec![];
     for e in ignore::WalkBuilder::new(&root).max_depth(Some(5)).standard_filters(false).build().flatten() {
         if e.file_name().to_string_lossy() == exe("llama-server") {
             let t = e.metadata().ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
-            found.push((t, e.path().to_path_buf()));
+            let complete = !e.path().to_string_lossy().contains(STAGING_SUFFIX);
+            found.push((complete, t, e.path().to_path_buf()));
         }
     }
     found.sort();
-    if let Some((_, p)) = found.pop() {
+    if let Some((_, _, p)) = found.pop() {
         return Some(p);
     }
     let path_var = crate::proc::child_path(paths, &[]);
@@ -506,6 +547,57 @@ impl Deps {
     }
 
     // ------------------------------------------------------------------ llama.cpp
+    /// Önceki bir llama.cpp kurulumu arşiv açıldıktan sonra son adımda (klasörü yerine taşırken) yarıda kaldıysa
+    /// onu tamamlar. Yoksa FerIDE geçici klasördeki sunucuyu kullanır, kurulum "yok" sayılır ve her güncelleme
+    /// çalışan sunucunun klasörünü silmeye çalışır. Açılışta çağrılır; çalışan sürüm olduğunda dokunmaz.
+    pub fn recover_staged_llama(&self) {
+        let root = self.paths.llama_root();
+        if let Ok(cur) = std::fs::read_to_string(root.join("current.txt")) {
+            if root.join(cur.trim()).join(exe("llama-server")).is_file() {
+                return;
+            }
+        }
+        let Ok(rd) = std::fs::read_dir(&root) else { return };
+        let mut staged: Vec<(std::time::SystemTime, PathBuf)> = rd
+            .flatten()
+            .filter(|e| e.path().is_dir() && e.file_name().to_string_lossy().ends_with(STAGING_SUFFIX))
+            .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path()))
+            .collect();
+        staged.sort();
+        let Some((_, staging)) = staged.pop() else { return };
+        let Some(server) = find_file(&staging, &exe("llama-server")) else { return };
+        if self.version_of(&server, "--version").is_none() {
+            return;
+        }
+        let name = staging.file_name().unwrap().to_string_lossy().trim_end_matches(STAGING_SUFFIX).to_string();
+        let target = root.join(&name);
+        let rel_dir = server.parent().unwrap().strip_prefix(&staging).unwrap_or(Path::new("")).to_path_buf();
+        // Çalışan bir sunucu klasörü kilitliyorsa (yalnızca Windows) kopyalamaz; bir sonraki açılışta denenir.
+        let mut moved = false;
+        for _ in 0..6 {
+            let _ = std::fs::remove_dir_all(&target);
+            if std::fs::rename(&staging, &target).is_ok() {
+                moved = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if !moved {
+            tracing::warn!("yarım kalan llama.cpp kurulumu tamamlanamadı: {} kullanımda", staging.display());
+            return;
+        }
+        let current = PathBuf::from(&name).join(rel_dir);
+        if crate::util::write_atomic(&root.join("current.txt"), current.to_string_lossy().as_bytes()).is_err() {
+            return;
+        }
+        let (tag, backend) = name.split_once('-').map(|(t, b)| (t.to_string(), b.to_string())).unwrap_or((name.clone(), String::new()));
+        self.update_state(|s| {
+            s.llama_tag = Some(tag);
+            s.llama_backend = (!backend.is_empty()).then_some(backend);
+        });
+        tracing::info!("yarım kalan llama.cpp kurulumu tamamlandı: {name}");
+    }
+
     async fn install_llama(&self, backend_pref: &str) -> anyhow::Result<String> {
         let os = if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" };
         let backend = match backend_pref {
@@ -529,7 +621,7 @@ impl Deps {
         let dir_name = format!("{}-{}", rel.tag_name, backend);
         let root = self.paths.llama_root();
         let target = root.join(&dir_name);
-        let staging = root.join(format!("{dir_name}.kuruluyor"));
+        let staging = root.join(format!("{dir_name}{STAGING_SUFFIX}"));
         let _ = tokio::fs::remove_dir_all(&staging).await;
         tokio::fs::create_dir_all(&staging).await?;
         for a in &assets {
@@ -566,8 +658,10 @@ impl Deps {
         if ver.is_none() {
             anyhow::bail!("llama-server kuruldu ama çalıştırılamadı (eksik sürücü ya da çalışma zamanı olabilir).");
         }
-        let _ = tokio::fs::remove_dir_all(&target).await;
-        tokio::fs::rename(&staging, &target).await?;
+        let (from, to) = (staging.clone(), target.clone());
+        tokio::task::spawn_blocking(move || move_dir_retry(&from, &to, 20))
+            .await?
+            .map_err(|e| anyhow::anyhow!("llama.cpp klasörü yerine taşınamadı: {e}"))?;
         let rel_dir = server_dir.strip_prefix(&staging).unwrap_or(Path::new("")).to_path_buf();
         let current = PathBuf::from(&dir_name).join(rel_dir);
         crate::util::write_atomic(&root.join("current.txt"), current.to_string_lossy().as_bytes())?;
