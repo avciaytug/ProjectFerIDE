@@ -1,5 +1,20 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.14) — Otomatik güncelleme
+
+- **FerIDE artık kendini güncelliyor:** kurulu FerIDE açıkken GitHub'daki yeni sürümleri denetler (açılıştan
+  1 dakika sonra, sonra 6 saatte bir). Yeni sürüm varsa arka planda indirir, SHA-256 ile doğrular, yeni programın bu
+  bilgisayarda çalıştığını sınar ve kurar; çalışmanız kesilmez. Çalışan FerIDE eski dosyadan devam eder; yeni sürüm
+  yeniden başlatınca devreye girer. Durum çubuğunda **Güncelleme hazır** belirir: tıklayınca sürüm notları gösterilir
+  ve **Yeniden başlat** ile FerIDE yeni sürümle açılır (yüklü model yeniden yüklenir). Yeniden başlatmazsanız yeni
+  sürüm bir sonraki açılışta gelir.
+- Ayarlar → Genel → **Güncellemeler**: otomatik güncellemeyi aç/kapat, **Şimdi denetle**, durum ve sürüm notları.
+- Komut satırı: `feride update` (indirip kurar), `feride update --check` (yalnızca denetler).
+- Yalnızca kurulu kopyalar kendini günceller; geliştirme ve taşınabilir kopyalara dokunulmaz. Yeni sürüm çalışmazsa
+  (bozuk paket, Windows Akıllı Uygulama Denetimi…) kurulmaz, mevcut sürüm korunur. Sürümler GitHub'ın listeleme
+  sırasına göre değil sürüm numarasına göre karşılaştırılır; eski sürüme dönülmez.
+- Kaldırıcı ve kurulum betikleri güncellemeden kalan eski program dosyasını (`feride.old.exe`) da temizler.
+
 ## beta v5.4 (5.4.0-beta.13) — Model yüklüyken plan önizlemesi
 
 - Bir model yüklüyken Model Merkezi'ndeki **Plan** düğmesi, yüklü modelin kullandığı RAM'i ve Windows sanal bellek

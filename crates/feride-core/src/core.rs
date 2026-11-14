@@ -28,6 +28,7 @@ pub struct Core {
     pub secrets: Secrets,
     pub deps: Deps,
     pub llama: Arc<LlamaManager>,
+    pub updater: Arc<crate::update::Updater>,
     pub hub: Arc<Hub>,
     pub mcp: Arc<McpManager>,
     pub sessions: Sessions,
@@ -63,6 +64,7 @@ impl Core {
         Arc::new(Core {
             secrets: Secrets::new(paths.secrets_file()),
             llama: Arc::new(LlamaManager::new(paths.clone(), events.clone())),
+            updater: Arc::new(crate::update::Updater::new(paths.clone(), events.clone())),
             hub: Arc::new(Hub::new(paths.clone(), events.clone())),
             mcp: Arc::new(McpManager::new(paths.clone(), events.clone())),
             sessions: Sessions::new(paths.sessions()),
@@ -86,8 +88,14 @@ impl Core {
         }
         self.mcp.start_all();
         let s = self.settings();
-        if s.model.auto_start && s.provider.kind == "local" {
-            if let Some(m) = s.model.selected.clone() {
+        // Güncelleme için yeniden başlatıldıysa o sırada yüklü olan model yeniden yüklenir.
+        let resume = self.deps.state().resume_model;
+        if resume.is_some() {
+            self.deps.update_state(|st| st.resume_model = None);
+        }
+        let to_start = resume.filter(|m| m.is_file()).or_else(|| s.model.selected.clone().filter(|_| s.model.auto_start));
+        if s.provider.kind == "local" {
+            if let Some(m) = to_start {
                 let me = Arc::clone(self);
                 tokio::spawn(async move {
                     let st = me.settings();
@@ -95,6 +103,17 @@ impl Core {
                 });
             }
         }
+        // Otomatik güncelleme: açılıştan bir dakika sonra, sonra altı saatte bir.
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(crate::update::FIRST_CHECK).await;
+            loop {
+                if me.settings().updates.auto {
+                    me.updater.run_once().await;
+                }
+                tokio::time::sleep(crate::update::INTERVAL).await;
+            }
+        });
     }
 
     pub fn settings(&self) -> Settings {

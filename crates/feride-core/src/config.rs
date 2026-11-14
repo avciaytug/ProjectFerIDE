@@ -44,6 +44,20 @@ pub struct Settings {
     pub voice: VoiceSettings,
     pub editor: EditorSettings,
     pub disabled_skills: Vec<String>,
+    pub updates: UpdateSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// GitHub'daki yeni sürümleri arka planda denetle, indir ve kur (yeniden başlatınca geçerli olur).
+    pub auto: bool,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self { auto: true }
+    }
 }
 
 impl Default for Settings {
@@ -59,6 +73,7 @@ impl Default for Settings {
             voice: VoiceSettings::default(),
             editor: EditorSettings::default(),
             disabled_skills: vec![],
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -217,5 +232,6 @@ mod tests {
         let s: Settings = toml::from_str("theme = \"light\"\n[model]\ncontext = 8192\n").unwrap();
         assert_eq!(s.model.context, 8192);
         assert_eq!(s.model.backend, "auto");
+        assert!(s.updates.auto, "eski ayar dosyalarında otomatik güncelleme açık olmalı");
     }
 }

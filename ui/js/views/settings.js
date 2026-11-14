@@ -1,5 +1,5 @@
 // Ayarlar: genel, ajan ve güvenlik, düzenleyici, ses, MCP, skill'ler, hafıza.
-import { S, saveSettings, loadSettings } from '../app.js';
+import { S, saveSettings, loadSettings, restartForUpdate } from '../app.js';
 import { h, icon, toast, relTime, confirmBox, modal, renderMarkdown, fmtBytes } from '../util.js';
 import * as Editor from './editor.js';
 
@@ -27,6 +27,41 @@ function render() {
   const body = h('div');
   el.append(h('div', { class: 'page-inner' }, h('h2', {}, 'Ayarlar'), nav, body));
   ({ general, agent, mcp, skills, memory, voice })[tab](body);
+}
+
+// ---------------------------------------------------------------- güncellemeler
+let updateSec = null;
+
+export function onUpdate() {
+  if (updateSec?.isConnected) renderUpdate(updateSec);
+}
+
+function renderUpdate(sec) {
+  updateSec = sec;
+  const u = S.update || { state: 'idle' };
+  const pct = u.total ? ` %${Math.floor((u.done * 100) / u.total)}` : '';
+  const text = {
+    idle: 'Henüz denetlenmedi.',
+    checking: 'Denetleniyor…',
+    downloading: `FerIDE ${u.latest} arka planda indiriliyor…${pct}`,
+    installing: `FerIDE ${u.latest} doğrulanıp kuruluyor…`,
+    ready: `FerIDE ${u.ready_version} kuruldu; yeniden başlatınca geçerli olur.`,
+    up_to_date: `Güncel${u.latest ? ` (GitHub'daki en yeni sürüm ${u.latest})` : ''}.`,
+    error: u.message || 'Denetlenemedi.',
+    unsupported: u.message || 'Bu kopya kendini güncelleyemiyor.',
+  }[u.state] || '';
+  const busy = ['checking', 'downloading', 'installing'].includes(u.state);
+  sec.innerHTML = '';
+  sec.append(
+    h('div', { class: 'sh' }, h('h3', {}, 'Güncellemeler')),
+    field('Otomatik güncelleme', 'FerIDE açıkken GitHub\'daki yeni sürümleri denetler (açılıştan 1 dakika sonra, sonra 6 saatte bir), yeni sürümü arka planda indirip doğrular ve kurar. Yeni sürüm FerIDE yeniden başlatılınca devreye girer.',
+      u.updatable === false ? h('span', { class: 'small muted' }, 'Bu kopyada kullanılamaz') : check(S.settings.updates?.auto !== false, async (v) => { await saveSettings({ updates: { auto: v } }); if (v) S.rpc.call('update.check').catch(() => {}); }, 'Yeni sürümleri otomatik indir ve kur')),
+    field('Durum', `Çalışan sürüm: ${u.current || S.info?.version || ''}${u.checked_at ? ` • son denetim ${relTime(u.checked_at)}` : ''}`,
+      h('div', { class: 'row', style: { flexWrap: 'wrap', justifyContent: 'flex-end' } },
+        h('span', { class: 'small', style: { maxWidth: '440px', color: u.state === 'error' ? 'var(--err)' : u.state === 'ready' ? 'var(--accent)' : '' } }, busy ? icon('loader', 'spin') : null, ' ', text),
+        u.state === 'ready' ? h('button', { class: 'btn sm primary', onclick: () => restartForUpdate() }, icon('refresh'), 'Yeniden başlat') : null,
+        u.updatable && !busy ? h('button', { class: 'btn sm', onclick: () => S.rpc.call('update.check').catch((e) => toast(e.message, 'err')) }, icon('refresh'), 'Şimdi denetle') : null,
+        u.page_url ? h('button', { class: 'btn sm ghost', onclick: () => S.rpc.call('app.open_url', { url: u.page_url }) }, 'Sürüm notları') : null)));
 }
 
 function renderInstall(sec, inst) {
@@ -92,6 +127,9 @@ function general(body) {
     field('Veri klasörü', S.info?.data_dir, h('div', { class: 'row' },
       h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_path', { path: 'data' }) }, icon('folder'), 'Aç'),
       h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_path', { path: 'logs' }) }, icon('file'), 'Günlükler')))));
+  const upSec = h('div', { class: 'section' });
+  body.append(upSec);
+  renderUpdate(upSec);
   const installSec = h('div', { class: 'section' }, h('div', { class: 'sh' }, h('h3', {}, 'Kurulum')), h('div', { class: 'status-line' }, icon('loader', 'spin'), 'Okunuyor…'));
   body.append(installSec);
   S.rpc.call('app.install_info').then((inst) => renderInstall(installSec, inst)).catch((e) => { installSec.lastChild.textContent = e.message; });

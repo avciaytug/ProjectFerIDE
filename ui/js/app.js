@@ -1,6 +1,6 @@
 // FerIDE arayüz giriş noktası.
 import { Rpc } from './rpc.js';
-import { h, icon, toast, basename, store } from './util.js';
+import { h, icon, toast, basename, store, modal, renderMarkdown } from './util.js';
 import * as Explorer from './views/explorer.js';
 import * as Sessions from './views/sessions.js';
 import * as Editor from './views/editor.js';
@@ -120,7 +120,38 @@ export function renderStatusbar() {
   }
   const tps = S.usage?.turn?.tps ?? S.usage?.tps;
   if (tps) sb.append(h('span', { class: 'item', title: 'Son turun ortalama üretim hızı' }, icon('zap'), `${tps.toFixed(1).replace('.', ',')} token/sn`));
+  const up = S.update;
+  if (up?.state === 'ready') {
+    sb.append(h('span', { class: 'item click', style: { color: 'var(--accent)' }, title: `FerIDE ${up.ready_version} kuruldu — yeniden başlatmak için tıklayın`, onclick: () => restartForUpdate() }, icon('refresh'), 'Güncelleme hazır'));
+  } else if ((up?.state === 'downloading' || up?.state === 'installing') && up.latest) {
+    const pct = up.total ? ` %${Math.floor((up.done * 100) / up.total)}` : '';
+    sb.append(h('span', { class: 'item', title: `FerIDE ${up.latest} arka planda indiriliyor` }, icon('download'), up.state === 'installing' ? 'Güncelleme kuruluyor' : `Güncelleme${pct}`));
+  }
   sb.append(h('span', { class: 'item' }, `FerIDE ${S.info?.display_version || ''}`));
+}
+
+// Güncelleme kuruldu: yeni sürümle yeniden başlatmayı önerir.
+export function restartForUpdate() {
+  const u = S.update || {};
+  const loaded = S.model?.state === 'ready' ? ' Yüklü model yeni sürümde otomatik olarak yeniden yüklenir.' : '';
+  modal({
+    title: `FerIDE ${u.ready_version || ''} kuruldu`,
+    wide: !!u.notes,
+    body: h('div', { class: 'col' },
+      h('div', {}, `FerIDE kapanıp yeni sürümle yeniden açılacak. Sohbetleriniz kayıtlı; devam eden bir yanıt varsa yarıda kalır.${loaded}`),
+      u.notes ? h('div', { style: { maxHeight: '45vh', overflow: 'auto', borderTop: '1px solid var(--border)', paddingTop: '8px' } }, renderMarkdown(u.notes)) : null),
+    actions: [
+      { label: 'Sonra' },
+      u.page_url ? { label: 'GitHub\'da aç', run: () => { S.rpc.call('app.open_url', { url: u.page_url }); return false; } } : null,
+      {
+        label: 'Yeniden başlat',
+        cls: 'primary',
+        run: () => {
+          S.rpc.call('update.restart').then(() => toast('FerIDE yeni sürümle yeniden başlatılıyor…', 'warn', 10000)).catch((e) => toast(e.message, 'err', 8000));
+        },
+      },
+    ].filter(Boolean),
+  });
 }
 
 export function placementLabel(p) {
@@ -222,10 +253,18 @@ async function boot() {
   await loadSettings();
   await refreshInfo();
   S.model = await S.rpc.call('models.status');
+  S.update = await S.rpc.call('update.status').catch(() => null);
   renderTopbar();
 
   S.rpc.on('model.status', (st) => { S.model = st; renderTopbar(); renderStatusbar(); Models.onStatus?.(st); Chat.updateHint?.(); });
   S.rpc.on('settings.changed', (s) => { S.settings = s; applyTheme(); renderTopbar(); Chat.updateHint?.(); });
+  S.rpc.on('update.status', (u) => {
+    const was = S.update?.state;
+    S.update = u;
+    renderStatusbar();
+    Settings.onUpdate?.(u);
+    if (u.state === 'ready' && was !== 'ready') toast(`FerIDE ${u.ready_version} arka planda indirildi ve kuruldu. Yeniden başlatınca geçerli olur (durum çubuğundaki "Güncelleme hazır").`, 'ok', 12000);
+  });
   S.rpc.on('agent', (ev) => {
     if (ev.kind === 'usage') { S.usage = ev; renderStatusbar(); }
     if (ev.kind === 'done') refreshGit();

@@ -56,6 +56,74 @@ pub fn exe_name() -> &'static str {
     }
 }
 
+/// Uygulama içi güncellemede kenara alınan eski program (çalışan süreç bu dosyadan devam eder).
+pub fn old_exe_name() -> &'static str {
+    if cfg!(windows) {
+        "feride.old.exe"
+    } else {
+        "feride.old"
+    }
+}
+
+/// Uygulama içi güncellemede indirilip sınanan, henüz yerine konmamış yeni program.
+pub fn new_exe_name() -> &'static str {
+    if cfg!(windows) {
+        "feride.new.exe"
+    } else {
+        "feride.new"
+    }
+}
+
+/// Güncellemeden kalan program dosyası mı (`feride.old*`, `feride.new*`)?
+fn is_update_leftover(name: &str) -> bool {
+    name.starts_with("feride.old") || name.starts_with("feride.new")
+}
+
+/// Program klasöründeki güncelleme artıklarını siler (kullanımdaysa sessizce bırakır).
+pub fn cleanup_update_leftovers(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        if e.path().is_file() && e.file_name().to_str().is_some_and(is_update_leftover) {
+            let p = e.path();
+            // Yeniden başlatan eski süreç birkaç an önce kapandı; dosya kısa süre kilitli kalabilir.
+            for _ in 0..10 {
+                if std::fs::remove_file(&p).is_ok() || !p.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    }
+}
+
+/// Uygulama içi güncellemeden sonra yeni sürümün ilk açılışında: eski program dosyaları silinir, `install.json`'daki
+/// sürüm ve Windows "Uygulamalar" kaydındaki sürüm yenilenir. Kısayollar ve PATH aynı dosyayı gösterdiği için
+/// değişmez.
+pub fn after_update() {
+    let Some(dir) = current_exe_dir() else { return };
+    let Some(mut info) = info_in(&dir) else { return };
+    if !same_path(&info.install_dir, &dir) {
+        return;
+    }
+    cleanup_update_leftovers(&dir);
+    if info.version == crate::VERSION {
+        return;
+    }
+    tracing::info!("FerIDE {} → {} güncellendi; kurulum kaydı yenileniyor", info.version, crate::VERSION);
+    info.version = crate::VERSION.to_string();
+    if write_json(&dir.join(INSTALL_FILE), &info).is_err() {
+        return;
+    }
+    // Kullanıcı genelindeki kayıtlara (işaret dosyası, Windows "Uygulamalar") yalnızca kayıtlı kurulum dokunur;
+    // başka klasördeki ikinci bir kopya asıl kurulumun kaydını ele geçirmesin.
+    if !read_info(&pointer_file()).is_some_and(|p| same_path(&p.install_dir, &dir)) {
+        return;
+    }
+    let _ = write_json(&pointer_file(), &info);
+    let only_register = InstallInfo { desktop_shortcut: false, menu_shortcut: false, add_path: false, ..info };
+    let _ = integrate(&only_register, &dir.join(exe_name()), true);
+}
+
 /// Çalışan programın bulunduğu klasör (Windows'ta `\\?\` öneki olmadan).
 pub fn current_exe_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -282,8 +350,14 @@ pub fn validate(opts: &InstallOptions) -> anyhow::Result<()> {
 }
 
 /// Hedef programı çalıştıran diğer süreçleri kapatır (güncelleme ve kaldırma için). Kapatılan süreç sayısını döner.
+/// Uygulama içi güncellemeden sonra henüz yeniden başlatılmamış eski sürüm (`feride.old.exe`) de kapatılır.
 pub fn stop_instances(exe: &Path) -> usize {
-    stop_matching(|e| same_path(e, exe))
+    let dir = exe.parent().map(Path::to_path_buf);
+    stop_matching(|e| {
+        same_path(e, exe)
+            || (dir.as_deref().is_some_and(|d| e.parent().is_some_and(|p| same_path(p, d)))
+                && e.file_name().and_then(|n| n.to_str()).is_some_and(is_update_leftover))
+    })
 }
 
 /// Programı `matches` koşulunu sağlayan süreçleri (bu süreç hariç) kapatır ve kapanmalarını bekler.
@@ -672,8 +746,11 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
         r.warnings.extend(remove_integration(info, &exe));
     }
 
-    // Program klasörü
-    let running_here = std::env::current_exe().ok().is_some_and(|me| same_path(&me, &exe));
+    // Program klasörü. Kaldırıcı, güncellemeden sonra henüz yeniden başlatılmamış eski dosyadan (`feride.old.exe`)
+    // da çalışıyor olabilir.
+    let me = std::env::current_exe().ok().map(|m| dunce::canonicalize(&m).unwrap_or(m));
+    let running_here = me.as_ref().is_some_and(|me| me.parent().is_some_and(|p| same_path(p, &info.install_dir)));
+    let self_file = me.clone().filter(|_| running_here).unwrap_or_else(|| exe.clone());
     if is_dangerous(&info.install_dir) {
         r.warnings.push(format!("{} korumalı bir klasör; yalnızca FerIDE dosyaları silindi.", info.install_dir.display()));
     }
@@ -681,9 +758,20 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
         let _ = std::fs::remove_file(info.install_dir.join(f));
     }
     if running_here && cfg!(windows) {
-        r.self_delete_scheduled = schedule_self_delete(&exe, &info.install_dir);
+        if !same_path(&self_file, &exe) {
+            let _ = std::fs::remove_file(&exe);
+        }
+        r.self_delete_scheduled = schedule_self_delete(&self_file, &info.install_dir);
     } else {
         let _ = std::fs::remove_file(&exe);
+    }
+    // Güncelleme artıkları (çalışan kaldırıcının kendisi zamanlanmış silmeyle gider).
+    if let Ok(rd) = std::fs::read_dir(&info.install_dir) {
+        for e in rd.flatten() {
+            if e.file_name().to_str().is_some_and(is_update_leftover) && !same_path(&e.path(), &self_file) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
     let _ = std::fs::remove_dir(&info.install_dir); // boşsa
     r.removed_program = !exe.exists() || r.self_delete_scheduled;

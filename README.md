@@ -101,7 +101,12 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
 
 ### Güncelleme ve kaldırma
 
-- **Güncelleme:** kurulum komutunu yeniden çalıştırın; FerIDE bulunduğu yerde güncellenir, ayarlar, modeller ve
+- **Otomatik güncelleme:** kurulu FerIDE açıkken GitHub'daki yeni sürümleri denetler (açılıştan 1 dakika sonra,
+  sonra 6 saatte bir). Yeni sürümü arka planda indirir, SHA-256 ile doğrular, bu bilgisayarda çalıştığını sınar ve
+  kurar; çalışmanız kesilmez. Durum çubuğunda **Güncelleme hazır** belirince tıklayıp yeniden başlatın (yüklü model
+  yeni sürümde yeniden yüklenir) ya da FerIDE'yi bir sonraki açışınızda yeni sürüm gelir. Ayarlar → Genel →
+  **Güncellemeler**'den kapatılabilir ve elle denetlenebilir; komut satırından `feride update`.
+- **Elle güncelleme:** kurulum komutunu yeniden çalıştırın; FerIDE bulunduğu yerde güncellenir, ayarlar, modeller ve
   sohbetler korunur.
 - **Kaldırma** (üç yoldan biri):
   - **Windows:** Ayarlar → Uygulamalar → Yüklü uygulamalar → **FerIDE** → **Kaldır**.
@@ -128,7 +133,8 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
 ### Gizlilik
 
 Modeller, konuşma tanıma ve ses tamamen bu bilgisayarda çalışır; sohbetleriniz hiçbir sunucuya gönderilmez.
-İnternet yalnızca kurulumda, model indirirken ve ajandan web araması / sayfa okuma istediğinizde kullanılır.
+İnternet yalnızca kurulumda, model indirirken, ajandan web araması / sayfa okuma istediğinizde ve güncelleme
+denetiminde (GitHub'ın sürüm listesi; hiçbir kullanıcı verisi gönderilmez, Ayarlar'dan kapatılabilir) kullanılır.
 
 ### Kaynaktan derleme
 
@@ -152,6 +158,7 @@ cargo build --release
 | `feride setup [llama git uv node pydocs voice]` | Eksikleri kurar |
 | `feride install [--dir D] [--data D] [--yes]` | Kurulum sihirbazı; `--yes` ile sormadan kurar (`--no-shortcuts`, `--no-path`, `--no-launch`) |
 | `feride uninstall [--purge] [--yes]` | Kaldırır; `--purge` modelleri ve sohbetleri de siler |
+| `feride update [--check]` | GitHub'daki yeni sürümü indirip kurar; `--check` yalnızca denetler |
 
 ## Veri klasörü
 

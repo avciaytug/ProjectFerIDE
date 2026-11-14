@@ -65,6 +65,8 @@ pub struct SetupState {
     pub llama_tag: Option<String>,
     pub llama_backend: Option<String>,
     pub resources_version: Option<String>,
+    /// Güncelleme için yeniden başlatılırken yüklü olan model: yeni sürüm açılınca yeniden yüklenir.
+    pub resume_model: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

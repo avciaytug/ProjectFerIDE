@@ -6,6 +6,7 @@
 //! `feride setup [id…]`   eksik bağımlılıkları kurar
 //! `feride install`       kurulum sihirbazı (program ve veri klasörü seçimi)
 //! `feride uninstall`     FerIDE'yi kaldırır
+//! `feride update`        GitHub'daki yeni sürümü indirip kurar
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -27,6 +28,9 @@ use feride_core::Core;
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
+    /// Güncellemeden sonra yeniden başlarken: önceki süreç kapanana kadar bekle.
+    #[arg(long, hide = true, global = true)]
+    restart_after: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -85,6 +89,12 @@ enum Cmd {
         wait_pid: Option<u32>,
         #[arg(long, hide = true)]
         notify: bool,
+    },
+    /// GitHub'da yeni sürüm varsa indirip kurar (açık FerIDE yeniden başlatılınca geçerli olur).
+    Update {
+        /// Yalnızca denetle, kurma.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -146,6 +156,10 @@ fn main() {
     if cli.cmd.is_some() {
         attach_console();
     }
+    if let Some(pid) = cli.restart_after {
+        // Eski sürüm kapanıp tek örnek kilidini bırakana kadar bekle.
+        feride_core::update::wait_for_exit(pid, std::time::Duration::from_secs(60));
+    }
     // Kurulum ve kaldırma veri klasörüne dokunmadan çalışır (kullanıcı henüz yer seçmemiş olabilir).
     match cli.cmd {
         Some(Cmd::Install { dir, data, yes, update, no_shortcuts, no_path, no_launch, print_url }) => {
@@ -183,6 +197,7 @@ fn main() {
     match cli.cmd {
         Some(Cmd::Install { .. }) | Some(Cmd::Uninstall { .. }) => unreachable!("yukarıda işlendi"),
         Some(Cmd::Doctor) => rt.block_on(doctor(paths)),
+        Some(Cmd::Update { check }) => std::process::exit(rt.block_on(update_cmd(paths, check))),
         Some(Cmd::Setup { ids }) => rt.block_on(setup(paths, ids)),
         Some(Cmd::Serve { port, listen, open }) => {
             let Some(_lock) = instance_lock(&paths) else {
@@ -192,6 +207,7 @@ fn main() {
             if listen != "127.0.0.1" && listen != "localhost" {
                 eprintln!("UYARI: FerIDE {listen} adresinde dinliyor; jetona sahip herkes bu bilgisayarda komut çalıştırabilir.");
             }
+            std::thread::spawn(feride_core::install::after_update);
             rt.block_on(async move {
                 let core = Core::new(paths.clone());
                 core.start_background();
@@ -235,6 +251,8 @@ fn run_desktop(rt: tokio::runtime::Runtime, paths: Paths) {
         }
         return;
     }
+    // Uygulama içi güncellemeden sonraki ilk açılış: eski program dosyası silinir, kurulum kaydındaki sürüm yenilenir.
+    std::thread::spawn(feride_core::install::after_update);
     let core = rt.block_on(async {
         let core = Core::new(paths.clone());
         core.start_background();
@@ -288,6 +306,46 @@ fn open_window_or_browser(
     }
     let _ = open::that_detached(&url);
     true
+}
+
+async fn update_cmd(paths: Paths, check_only: bool) -> i32 {
+    use feride_core::update::{is_newer, Updater};
+    let up = Updater::new(paths, feride_core::events::EventBus::new());
+    let st = up.status();
+    println!("FerIDE {}", st.current);
+    if !st.updatable {
+        println!("{}", st.message.unwrap_or_default());
+        return 1;
+    }
+    let c = match up.latest().await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            println!("Bu platform için yayınlanmış bir sürüm bulunamadı.");
+            return 0;
+        }
+        Err(e) => {
+            println!("Denetlenemedi: {e}");
+            return 1;
+        }
+    };
+    if !is_newer(&c.version, &st.current) {
+        println!("Güncel (GitHub'daki en yeni sürüm {}).", c.version);
+        return 0;
+    }
+    println!("Yeni sürüm: {} — {}", c.version, c.page_url);
+    if check_only {
+        return 0;
+    }
+    println!("İndiriliyor, doğrulanıyor ve kuruluyor…");
+    up.run_once().await;
+    let s = up.status();
+    if s.state == "ready" {
+        println!("FerIDE {} kuruldu. Açık bir FerIDE varsa yeniden başlatınca geçerli olur.", c.version);
+        0
+    } else {
+        println!("{}", s.message.unwrap_or_else(|| "Kurulamadı.".into()));
+        1
+    }
 }
 
 async fn doctor(paths: Paths) {

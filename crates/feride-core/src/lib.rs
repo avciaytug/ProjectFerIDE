@@ -23,6 +23,7 @@ pub mod sessions;
 pub mod shell;
 pub mod skills;
 pub mod terminal;
+pub mod update;
 pub mod util;
 pub mod voice;
 pub mod winsec;

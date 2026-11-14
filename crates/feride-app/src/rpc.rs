@@ -95,6 +95,37 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
             });
             json!(true)
         }
+        // ------------------------------------------------------------ güncelleme
+        "update.status" => serde_json::to_value(core.updater.status())?,
+        "update.check" => {
+            let c = Arc::clone(core);
+            tokio::spawn(async move { c.updater.run_once().await });
+            serde_json::to_value(core.updater.status())?
+        }
+        "update.restart" => {
+            if core.updater.status().state != "ready" {
+                bail!("Kurulup yeniden başlatmayı bekleyen bir güncelleme yok.");
+            }
+            // Yüklü model yeni sürümde yeniden yüklensin.
+            let ms = core.llama.status();
+            if matches!(ms.state.as_str(), "ready" | "starting") {
+                if let Some(m) = ms.model_path.clone() {
+                    core.deps.update_state(|s| s.resume_model = Some(m));
+                }
+            }
+            if let Err(e) = core.updater.spawn_restart() {
+                core.deps.update_state(|s| s.resume_model = None);
+                return Err(e);
+            }
+            // Yanıt arayüze ulaşsın, sonra kapan: yeni sürüm bu sürecin bitmesini bekliyor.
+            let quit = st.quit.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                quit.notify_waiters();
+                quit.notify_one();
+            });
+            json!(true)
+        }
         "app.open_security" => {
             feride_core::winsec::open_security_settings()?;
             json!(true)
