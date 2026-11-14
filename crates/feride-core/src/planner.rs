@@ -771,6 +771,20 @@ mod tests {
     }
 
     #[test]
+    fn preview_with_running_model() {
+        // Sizin FerIDE'nizde ölçülen durum: Q8 yüklüyken taahhüt 11,3 GiB boş, RAM 13,6 GiB boş. Önizleme çalışan
+        // modelin taahhüdünü (44 GiB) ve RAM'ini (5,6 GiB) geri eklemeli: uyarı çıkmamalı.
+        let none = BTreeSet::new();
+        let mut hw = HardwareInfo { commit_available_bytes: Some((11.3 * G as f64) as u64), ..strix_carveout(96, 13.6) };
+        assert!(p(&qwen27b_q8(), &hw, ComputeMode::Auto, 0, &none).warnings.join("").contains("taahhüt"));
+        hw.add_back_running((5.6 * G as f64) as u64, Some(44 * G));
+        let r = p(&qwen27b_q8(), &hw, ComputeMode::Auto, 0, &none);
+        assert!(r.can_start());
+        assert!(!r.warnings.join("").contains("taahhüt"), "{r:?}");
+        assert!(hw.ram_available_bytes <= hw.ram_total_bytes);
+    }
+
+    #[test]
     fn small_carveout_still_counts_ram() {
         // Ayrılmış bellek küçükse (eski davranış) GPU'nun kullandığı bellek RAM'den gelir: 22,6 GiB boş RAM'e
         // 36 GB'lık model sığmaz ve GPU modunda gerçek neden (RAM) söylenir.

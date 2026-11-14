@@ -1,5 +1,12 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.13) — Model yüklüyken plan önizlemesi
+
+- Bir model yüklüyken Model Merkezi'ndeki **Plan** düğmesi, yüklü modelin kullandığı RAM'i ve Windows sanal bellek
+  taahhüdünü de dolu sayıyordu; aslında sığan bir model için yanlış "taahhüt sınırı aşılacak" ya da "RAM yetmiyor"
+  diyebiliyordu. Yeni model başlatılırken önce yüklü olan kapatıldığı için önizleme artık onun belleğini boş sayıyor.
+  Başlatma zaten doğru hesaplıyordu.
+
 ## beta v5.4 (5.4.0-beta.12) — GPU'ya ayrılmış bellek (VRAM) doğru hesaplanıyor
 
 - **AMD Adrenalin'de "Değişken Grafik Belleği" büyütülünce model GPU'da çalışmıyordu:** FerIDE Radeon 8060S gibi

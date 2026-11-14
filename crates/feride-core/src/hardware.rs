@@ -300,6 +300,50 @@ fn dedicated_gpu_memory(gpu_name: &str) -> Option<u64> {
     }
 }
 
+/// Çalışan bir sürecin bellek kullanımı: (RAM'deki çalışma kümesi, Windows'ta sanal bellek taahhüdü).
+pub fn process_memory(pid: u32) -> Option<(u64, Option<u64>)> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::ProcessStatus::{
+            K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+        };
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        // SAFETY: tanıtıcı yalnızca okuma izniyle açılır ve kapatılır; yapı doğru boyutla verilir.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut c: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
+            c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+            let ok = K32GetProcessMemoryInfo(h, (&mut c as *mut PROCESS_MEMORY_COUNTERS_EX).cast::<PROCESS_MEMORY_COUNTERS>(), c.cb);
+            CloseHandle(h);
+            (ok != 0).then_some((c.WorkingSetSize as u64, Some(c.PrivateUsage as u64)))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let pid = Pid::from_u32(pid);
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing().with_memory());
+        sys.process(pid).map(|p| (p.memory(), None))
+    }
+}
+
+impl HardwareInfo {
+    /// Plan önizlemesi için: yeni model başlatılırken önce çalışan model kapatılır, bu yüzden onun kullandığı RAM
+    /// ve sanal bellek taahhüdü boşalmış sayılır. (Yoksa model yüklüyken bakılan plan, aslında sığan bir model için
+    /// "RAM yetmiyor" ya da "taahhüt sınırı aşılacak" der.)
+    pub fn add_back_running(&mut self, rss: u64, commit: Option<u64>) {
+        self.ram_available_bytes = (self.ram_available_bytes + rss).min(self.ram_total_bytes);
+        if let (Some(avail), Some(c)) = (self.commit_available_bytes, commit) {
+            self.commit_available_bytes = Some(avail + c);
+        }
+    }
+}
+
 /// Windows'ta kullanılabilir sanal bellek taahhüdü (`GlobalMemoryStatusEx.ullAvailPageFile`).
 fn commit_available() -> Option<u64> {
     #[cfg(windows)]
@@ -418,6 +462,24 @@ mod name_tests {
     fn gpu_name_key() {
         assert_eq!(super::gpu_name_key("AMD Radeon(TM) 8060S Graphics"), "amdradeon8060sgraphics");
         assert_eq!(super::gpu_name_key("AMD Radeon 8060S Graphics"), "amdradeon8060sgraphics");
+    }
+
+    #[test]
+    fn own_process_memory() {
+        let (rss, commit) = super::process_memory(std::process::id()).expect("kendi sürecimiz okunabilmeli");
+        assert!(rss > 0);
+        if cfg!(windows) {
+            assert!(commit.unwrap_or(0) > 0);
+        }
+    }
+
+    /// Elle: `FERIDE_TEST_PID=<llama-server pid> cargo test -p feride-core -- --ignored --nocapture running_pid`
+    #[test]
+    #[ignore]
+    fn running_pid_memory() {
+        let pid: u32 = std::env::var("FERIDE_TEST_PID").unwrap().parse().unwrap();
+        let (rss, commit) = super::process_memory(pid).expect("süreç okunamadı");
+        println!("pid {pid}: RAM {:.1} GiB, taahhüt {:.1} GiB", rss as f64 / (1u64 << 30) as f64, commit.unwrap_or(0) as f64 / (1u64 << 30) as f64);
     }
 
     #[cfg(windows)]

@@ -314,7 +314,15 @@ impl LlamaManager {
         let t0 = Instant::now();
         let info = tokio::task::spawn_blocking(move || gguf::read(&model)).await?;
         let t_gguf = t0.elapsed();
-        let hw = self.hardware(Some(&server), true).await;
+        let mut hw = self.hardware(Some(&server), true).await;
+        // Model yüklüyken bakılan plan: başlatma önce çalışan modeli kapatır, onun RAM'i ve taahhüdü boşalmış sayılır.
+        // (`start` çağrısında model zaten kapatılmış olduğundan burası yalnızca önizlemede devreye girer.)
+        let running_pid = self.inner.lock().unwrap().kill.as_ref().and_then(|k| k.pid);
+        if let Some(pid) = running_pid {
+            if let Some((rss, commit)) = tokio::task::spawn_blocking(move || hardware::process_memory(pid)).await.ok().flatten() {
+                hw.add_back_running(rss, commit);
+            }
+        }
         let t_hw = t0.elapsed();
         let flags = self.flags(&server).await;
         tracing::debug!(
