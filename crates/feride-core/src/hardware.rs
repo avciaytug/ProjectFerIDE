@@ -39,6 +39,13 @@ pub struct HardwareInfo {
     /// Linux AMD APU: GPU'nun kullanabildiği üst sınır (GTT) ve önerilen değer.
     pub gpu_memory_limit_bytes: Option<u64>,
     pub suggested_gpu_memory_limit_bytes: Option<u64>,
+    /// Paylaşımlı bellekli GPU'ya (APU) BIOS/sürücüyle ayrılmış, işletim sisteminin RAM olarak görmediği bellek
+    /// (Windows: AMD Adrenalin "Değişken Grafik Belleği", Linux: amdgpu VRAM). GPU önce bu kısmı kullanır; model
+    /// buraya sığdığı sürece RAM'den yer kaplamaz.
+    pub dedicated_gpu_bytes: Option<u64>,
+    /// Windows: kullanılabilir sanal bellek taahhüdü (RAM + sayfa dosyası − kullanılan). Windows GPU'ya yüklenen
+    /// belleği de bu sınırdan düşer.
+    pub commit_available_bytes: Option<u64>,
     pub os: String,
     pub cpu_name: String,
 }
@@ -61,7 +68,11 @@ impl HardwareInfo {
                 "{} — {} GiB{}, {} GiB boş",
                 g.name,
                 gib(g.total_bytes),
-                if self.unified_memory { " (paylaşımlı)" } else { "" },
+                match (self.unified_memory, self.dedicated_gpu_bytes.filter(|d| *d >= 2 << 30)) {
+                    (false, _) => String::new(),
+                    (true, Some(d)) => format!(" ({} GiB ayrılmış, kalanı paylaşımlı)", gib(d)),
+                    (true, None) => " (paylaşımlı)".to_string(),
+                },
                 gib(g.free_bytes)
             ),
         };
@@ -228,6 +239,13 @@ pub async fn probe(paths: &Paths, server: Option<&Path>) -> HardwareInfo {
 
     let linux_apu = linux_amd_apu_limits(total);
     let unified = cfg!(target_os = "macos") || linux_apu.is_some() || gpus.iter().any(|g| UNIFIED_GPU.is_match(&g.name));
+    let dedicated = match gpus.first().filter(|_| unified) {
+        Some(g) => {
+            let name = g.name.clone();
+            tokio::task::spawn_blocking(move || dedicated_gpu_memory(&name)).await.ok().flatten()
+        }
+        None => None,
+    };
     HardwareInfo {
         ram_total_bytes: total,
         ram_available_bytes: avail,
@@ -236,9 +254,130 @@ pub async fn probe(paths: &Paths, server: Option<&Path>) -> HardwareInfo {
         unified_memory: unified,
         gpu_memory_limit_bytes: linux_apu.map(|l| l.0),
         suggested_gpu_memory_limit_bytes: linux_apu.map(|l| l.1),
+        dedicated_gpu_bytes: dedicated,
+        commit_available_bytes: commit_available(),
         os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
         cpu_name,
     }
+}
+
+/// Tümleşik GPU'ya ayrılmış (işletim sisteminin RAM olarak görmediği) bellek.
+/// Windows: ekran kartı sürücüsünün kayıt defterindeki `HardwareInformation.qwMemorySize` (Görev Yöneticisi'ndeki
+/// "Ayrılmış GPU belleği"; AMD Adrenalin'deki "Değişken Grafik Belleği" ayarı bunu değiştirir).
+/// Linux: tek AMD GPU'nun `mem_info_vram_total` değeri. macOS'ta bellek gerçekten ortaktır: `None`.
+#[allow(unused_variables)]
+fn dedicated_gpu_memory(gpu_name: &str) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        windows_dedicated_vram(gpu_name)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let n = gpu_name.to_lowercase();
+        if !n.contains("amd") && !n.contains("radeon") {
+            return None;
+        }
+        let mut found = vec![];
+        for e in std::fs::read_dir("/sys/class/drm").ok()?.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with("card") || !name[4..].chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let dev = e.path().join("device");
+            if std::fs::read_to_string(dev.join("vendor")).map(|v| v.trim() != "0x1002").unwrap_or(true) {
+                continue;
+            }
+            if let Some(b) = std::fs::read_to_string(dev.join("mem_info_vram_total")).ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                found.push(b);
+            }
+        }
+        // Birden çok AMD GPU varsa hangisinin tümleşik olduğu bilinemez.
+        (found.len() == 1).then(|| found[0])
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// Windows'ta kullanılabilir sanal bellek taahhüdü (`GlobalMemoryStatusEx.ullAvailPageFile`).
+fn commit_available() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: yapı sıfırla doldurulup boyutu yazıldıktan sonra yalnızca okunmak üzere API'ye verilir.
+        let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if unsafe { GlobalMemoryStatusEx(&mut m) } != 0 {
+            return Some(m.ullAvailPageFile);
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Ad karşılaştırması için: küçük harf, "(TM)"/"(R)" ve harf/rakam dışı karakterler atılır.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn gpu_name_key(s: &str) -> String {
+    s.to_lowercase().replace("(tm)", "").replace("(r)", "").chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+}
+
+#[cfg(windows)]
+fn windows_dedicated_vram(gpu_name: &str) -> Option<u64> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_ANY, RRF_RT_REG_SZ};
+    const CLASS: &str = "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let desc_name = wide("DriverDesc");
+    let mem_name = wide("HardwareInformation.qwMemorySize");
+    let want = gpu_name_key(gpu_name);
+    let mut found: Vec<(String, u64)> = vec![];
+    for i in 0..32 {
+        let key = wide(&format!("{CLASS}\\{i:04}"));
+        let mut buf = [0u16; 512];
+        let mut size = (buf.len() * 2) as u32;
+        // SAFETY: arabellekler geçerli ve boyutları doğru; yalnızca okuma yapılır.
+        let rc = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                desc_name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if rc != 0 {
+            continue;
+        }
+        let len = (size as usize / 2).min(buf.len());
+        let desc = String::from_utf16_lossy(&buf[..len]).trim_end_matches('\0').to_string();
+        let mut mem: u64 = 0;
+        let mut msize = 8u32;
+        // SAFETY: 8 baytlık arabellek; değer QWORD (bazı sürücülerde 8 baytlık BINARY) olarak saklanır.
+        let rc = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                mem_name.as_ptr(),
+                RRF_RT_ANY,
+                std::ptr::null_mut(),
+                (&mut mem as *mut u64).cast(),
+                &mut msize,
+            )
+        };
+        if rc == 0 && msize == 8 && mem > 0 {
+            found.push((gpu_name_key(&desc), mem));
+        }
+    }
+    found
+        .iter()
+        .find(|(d, _)| !d.is_empty() && (*d == want || want.contains(d.as_str()) || d.contains(want.as_str())))
+        .map(|x| x.1)
+        .or_else(|| (found.len() == 1).then(|| found[0].1))
 }
 
 /// Linux AMD APU (küçük VRAM + GTT): GPU'nun kullanabildiği bellek GTT'dir; çekirdek
@@ -271,6 +410,21 @@ fn linux_amd_apu_limits(ram_total: u64) -> Option<(u64, u64)> {
     }
     #[cfg(not(target_os = "linux"))]
     None
+}
+
+#[cfg(test)]
+mod name_tests {
+    #[test]
+    fn gpu_name_key() {
+        assert_eq!(super::gpu_name_key("AMD Radeon(TM) 8060S Graphics"), "amdradeon8060sgraphics");
+        assert_eq!(super::gpu_name_key("AMD Radeon 8060S Graphics"), "amdradeon8060sgraphics");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_registry_read_does_not_panic() {
+        let _ = super::windows_dedicated_vram("AMD Radeon(TM) 8060S Graphics");
+    }
 }
 
 #[cfg(test)]

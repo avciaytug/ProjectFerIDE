@@ -133,7 +133,7 @@ async function showPlan(m) {
         h('span', { class: 'k' }, 'Mimari'), `${i.architecture || '?'} • ${i.block_count || '?'} katman${i.expert_count > 1 ? ` • MoE ${i.expert_count} uzman` : ''}`,
         h('span', { class: 'k' }, 'Ağırlıklar'), fmtBytes(i.weight_bytes),
         h('span', { class: 'k' }, 'Eğitim bağlamı'), i.context_length ? `${Math.round(i.context_length / 1024)}K` : '?',
-        h('span', { class: 'k' }, 'GPU'), hw.gpus?.[0] ? `${hw.gpus[0].name} — ${fmtBytes(hw.gpus[0].free_bytes)} boş / ${fmtBytes(hw.gpus[0].total_bytes)}${hw.unified_memory ? ' (paylaşımlı)' : ''}` : 'yok',
+        h('span', { class: 'k' }, 'GPU'), hw.gpus?.[0] ? `${hw.gpus[0].name} — ${fmtBytes(hw.gpus[0].free_bytes)} boş / ${fmtBytes(hw.gpus[0].total_bytes)}${hw.unified_memory ? (hw.dedicated_gpu_bytes >= 2 ** 31 ? ` (${fmtBytes(hw.dedicated_gpu_bytes)} ayrılmış, kalanı paylaşımlı)` : ' (paylaşımlı)') : ''}` : 'yok',
         h('span', { class: 'k' }, 'RAM'), `${fmtBytes(hw.ram_available_bytes)} boş / ${fmtBytes(hw.ram_total_bytes)}`,
         h('span', { class: 'k' }, 'Parametreler'), h('span', { class: 'mono tiny' }, (p.args || []).join(' '))));
     const { modal } = await import('../util.js');

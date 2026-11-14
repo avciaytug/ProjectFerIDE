@@ -131,8 +131,39 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
     } else {
         None
     };
-    let fits_total = |bytes: i64| -> bool {
-        bytes <= if hw.unified_memory { ram_budget } else { ram_budget + gpu_budget.max(0) }
+    // Paylaşımlı bellekli GPU'larda (APU) GPU önce kendisine ayrılmış bellekten (Windows'ta AMD Adrenalin "Değişken
+    // Grafik Belleği", Linux'ta VRAM) yer alır; işletim sistemi bu kısmı RAM olarak görmez. Yalnızca bunu aşan GPU
+    // kullanımı sistem RAM'inden yer. Ayrılmış bellek küçükse (ör. 512 MB–4 GB) GPU'nun her baytı RAM'den gelir.
+    let dedicated_avail: i64 = if hw.unified_memory && has_gpu {
+        let ded = (hw.dedicated_gpu_bytes.unwrap_or(0) as i64).min(gpu_total);
+        (ded - (gpu_total - gpu_free).max(0) - reserve).max(0)
+    } else {
+        0
+    };
+    // GPU'ya konan `gpu_bytes`'ın sistem RAM'inden kullandığı kısım.
+    let ram_for_gpu = |gpu_bytes: i64| -> i64 {
+        if hw.unified_memory {
+            (gpu_bytes - dedicated_avail).max(0)
+        } else {
+            0
+        }
+    };
+    let total_capacity = if hw.unified_memory { ram_budget + dedicated_avail } else { ram_budget + gpu_budget.max(0) };
+    let fits_total = |bytes: i64| -> bool { bytes <= total_capacity };
+    // Windows, paylaşımlı bellekli GPU'ya yüklenen belleği (ayrılmış VRAM'e de olsa) sanal bellek taahhüt sınırından
+    // düşer. Sınır aşılacaksa Windows sayfa dosyasını büyütmek zorundadır; sayfa dosyası kapalı ya da sabitse model
+    // yüklenemez.
+    let commit_warning = |gpu_bytes: i64| -> Option<String> {
+        let avail = hw.commit_available_bytes? as i64;
+        (hw.unified_memory && gpu_bytes + GIB > avail).then(|| {
+            format!(
+                "Windows, GPU'ya yüklenen belleği de sanal bellek (taahhüt) sınırından düşüyor; bu model sınırı ~{} GiB \
+                 aşacak. Sayfa dosyası otomatikse Windows onu büyütür (ilk yükleme biraz uzayabilir); kapalı ya da sabit \
+                 boyutluysa model yüklenemez: Sistem → Gelişmiş sistem ayarları → Performans → Gelişmiş → Sanal bellek → \
+                 \"Tüm sürücüler için disk belleği dosyası boyutunu otomatik yönet\".",
+                g(gpu_bytes + GIB - avail)
+            )
+        })
     };
 
     let mk = |placement: &str, ctx: i64, args: Vec<String>, summary: String, warnings: Vec<String>, blocker: Option<String>| {
@@ -208,21 +239,28 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
 
     if mode == ComputeMode::Gpu {
         let Some(fc) = full_gpu_ctx else {
-            return mk(
-                "gpu",
-                last,
-                vec![],
-                String::new(),
-                vec![],
-                Some(format!(
+            let need = weights + kv(last) + overhead;
+            let msg = if need <= gpu_budget {
+                // GPU'ya sığıyor; ama GPU bu belleğin bir kısmını sistem RAM'inden alıyor ve boş RAM yetmiyor.
+                format!(
+                    "Model GPU'ya sığıyor ama GPU bu belleğin bir kısmını sistem RAM'inden kullanıyor ve boş RAM yetmiyor: \
+                     {} GiB gerekiyor; GPU'ya ayrılmış bellekte {} GiB, RAM'de {} GiB yer var. Açık uygulamaları kapatın \
+                     veya daha düşük kuantize bir sürüm seçin.",
+                    g(need),
+                    g(dedicated_avail),
+                    g(ram_budget.max(0))
+                )
+            } else {
+                format!(
                     "Model GPU belleğine sığmıyor: {} GiB gerekiyor, GPU'da {} GiB kullanılabilir (masaüstü için {} GiB pay \
                      bırakılıyor). \"Otomatik\" veya \"CPU offload\" modunu seçin.{}",
-                    g(weights + kv(last) + overhead),
+                    g(need),
                     g(gpu_budget.max(0)),
                     g(reserve),
                     raise_hint.as_ref().map(|h| format!("\n\n{h}")).unwrap_or_default()
-                )),
-            );
+                )
+            };
+            return mk("gpu", last, vec![], String::new(), vec![], Some(msg));
         };
         let mut args = vulkan_args.clone();
         args.extend(["-ngl".to_string(), ngl_all.to_string()]);
@@ -233,6 +271,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
         args.extend(threads.clone());
         args.extend(uma_no_mmap.clone());
         let mut w = vec![];
+        w.extend(commit_warning(weights + kv(fc) + overhead));
         if small_ctx_warning(fc).is_some() {
             w.push(format!(
                 "Bağlam yalnızca {}: GPU belleği daha fazlasına yetmiyor. \"Otomatik\" mod bağlamın bir kısmını RAM'de \
@@ -259,7 +298,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
                 let total = weights + kv(c) + overhead;
                 if gpu_need <= gpu_budget
                     && fits_total(total)
-                    && (hw.unified_memory || info.expert_bytes as i64 <= ram_budget)
+                    && info.expert_bytes as i64 + ram_for_gpu(gpu_need) <= ram_budget
                     && (fixed_ctx || c <= floor || kv(c) as f64 <= gpu_budget as f64 * 0.35)
                 {
                     let mut args = vulkan_args.clone();
@@ -274,6 +313,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
                     args.extend(["-c".to_string(), c.to_string()]);
                     args.extend(threads.clone());
                     let mut w = vec![];
+                    w.extend(commit_warning(gpu_need));
                     if fixed_ctx && c < requested_ctx {
                         w.push(format!("Bağlam modelin eğitim sınırına ({}) indirildi.", k(c)));
                     }
@@ -292,24 +332,31 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
                     );
                 }
             }
-            return mk(
-                "moe-cpu",
-                last,
-                vec![],
-                String::new(),
-                vec![],
-                Some(format!(
-                    "Model bu bilgisayarın belleğine sığmıyor: {} GiB gerekiyor. Daha düşük kuantize bir sürüm seçin.",
-                    g(weights + kv(last) + overhead)
-                )),
-            );
+            if full_gpu_ctx.is_none() {
+                return mk(
+                    "moe-cpu",
+                    last,
+                    vec![],
+                    String::new(),
+                    vec![],
+                    Some(format!(
+                        "Model bu bilgisayarın belleğine sığmıyor: {} GiB gerekiyor. Daha düşük kuantize bir sürüm seçin.",
+                        g(weights + kv(last) + overhead)
+                    )),
+                );
+            }
+            // Uzmanlara RAM yetmiyor ama model tamamen GPU'ya sığıyor: aşağıda GPU planı seçilir.
         }
     }
 
     // --------------------------- Otomatik (ve MoE olmayan modelde CPU offload)
     let mut base_warnings = vec![];
     if mode == ComputeMode::Hybrid {
-        base_warnings.push("Bu model MoE değil; katmanlar GPU ve RAM arasında otomatik paylaştırılıyor.".to_string());
+        base_warnings.push(if info.is_some_and(|i| i.is_moe()) {
+            "CPU offload için RAM yetmiyor; model tamamen GPU'da çalıştırılıyor (daha hızlı).".to_string()
+        } else {
+            "Bu model MoE değil; katmanlar GPU ve RAM arasında otomatik paylaştırılıyor.".to_string()
+        });
     }
     let fit_args = |ctx: i64| -> Vec<String> {
         if can_fit {
@@ -333,6 +380,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
         args.extend(threads.clone());
         args.extend(uma_no_mmap.clone());
         let mut w = base_warnings.clone();
+        w.extend(commit_warning(weights + kv(fc) + overhead));
         if let Some(x) = small_ctx_warning(fc) {
             w.push(x);
         }
@@ -375,6 +423,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
             }
             args.extend(uma_no_mmap.clone());
             let mut w = base_warnings.clone();
+            w.extend(commit_warning(total.min(gpu_budget.max(0))));
             if let Some(h) = &raise_hint {
                 w.push(h.clone());
             }
@@ -405,7 +454,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
             "Model bu bilgisayarın belleğine sığmıyor: {} GiB gerekiyor, kullanılabilir toplam {} GiB. Daha düşük kuantize \
              bir sürüm seçin veya açık uygulamaları kapatın.",
             g(weights + kv(last) + overhead),
-            g(if hw.unified_memory { ram_budget } else { ram_budget + gpu_budget }.max(0))
+            g(total_capacity.max(0))
         )),
     )
 }
@@ -463,6 +512,8 @@ mod tests {
             unified_memory: true,
             gpu_memory_limit_bytes: Some((gtt * G as f64) as u64 - 512 * MIB),
             suggested_gpu_memory_limit_bytes: Some(112 * G),
+            dedicated_gpu_bytes: None,
+            commit_available_bytes: None,
             os: String::new(),
             cpu_name: String::new(),
         }
@@ -581,6 +632,8 @@ mod tests {
             unified_memory: false,
             gpu_memory_limit_bytes: None,
             suggested_gpu_memory_limit_bytes: None,
+            dedicated_gpu_bytes: None,
+            commit_available_bytes: None,
             os: String::new(),
             cpu_name: String::new(),
         };
@@ -600,6 +653,8 @@ mod tests {
             unified_memory: false,
             gpu_memory_limit_bytes: None,
             suggested_gpu_memory_limit_bytes: None,
+            dedicated_gpu_bytes: None,
+            commit_available_bytes: None,
             os: String::new(),
             cpu_name: String::new(),
         };
@@ -636,6 +691,8 @@ mod tests {
             unified_memory: false,
             gpu_memory_limit_bytes: None,
             suggested_gpu_memory_limit_bytes: None,
+            dedicated_gpu_bytes: None,
+            commit_available_bytes: None,
             os: String::new(),
             cpu_name: String::new(),
         };
@@ -651,5 +708,88 @@ mod tests {
         assert!(t.can_start());
         assert!(t.ctx < MIN_AGENT_CTX);
         assert!(t.warnings.join("").contains("Bağlam yalnızca"));
+    }
+
+    /// Windows'ta AMD Adrenalin ile GPU'ya 96 GB ayrılmış, Windows'a 32 GB RAM kalmış Strix Halo (kullanıcının gerçek
+    /// ölçümleri): Vulkan 111,8 GiB (106,2 boş), RAM 31,6 GiB (22,6 boş).
+    fn strix_carveout(dedicated_gib: u64, ram_avail: f64) -> HardwareInfo {
+        HardwareInfo {
+            ram_total_bytes: (31.6 * G as f64) as u64,
+            ram_available_bytes: (ram_avail * G as f64) as u64,
+            physical_cores: 16,
+            gpus: vec![GpuDevice {
+                id: "Vulkan0".into(),
+                name: "AMD Radeon(TM) 8060S Graphics".into(),
+                total_bytes: 114507 * MIB,
+                free_bytes: 108782 * MIB,
+            }],
+            unified_memory: true,
+            gpu_memory_limit_bytes: None,
+            suggested_gpu_memory_limit_bytes: None,
+            dedicated_gpu_bytes: Some(dedicated_gib * G),
+            commit_available_bytes: Some(50 * G),
+            os: String::new(),
+            cpu_name: String::new(),
+        }
+    }
+
+    fn qwen27b_q8() -> GgufInfo {
+        GgufInfo {
+            architecture: "qwen35".into(),
+            block_count: 64,
+            context_length: 262144,
+            full_kv_per_token: 16384,
+            weight_bytes: 36_100_000_000,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn carveout_runs_on_gpu() {
+        let none = BTreeSet::new();
+        let hw = strix_carveout(96, 22.6);
+        let a = p(&qwen27b_q8(), &hw, ComputeMode::Auto, 0, &none);
+        assert!(a.can_start(), "{a:?}");
+        assert_eq!(a.placement, "gpu");
+        assert_eq!(a.ctx, 131072);
+        let g = p(&qwen27b_q8(), &hw, ComputeMode::Gpu, 0, &none);
+        assert!(g.can_start(), "{g:?}");
+        assert!(contains_seq(&g.args, &["-ngl", "all"]));
+        // İşlemcide çalışamaz: RAM'e sığmıyor.
+        assert!(!p(&qwen27b_q8(), &hw, ComputeMode::Cpu, 0, &none).can_start());
+    }
+
+    #[test]
+    fn carveout_commit_warning() {
+        let none = BTreeSet::new();
+        let ok = p(&qwen27b_q8(), &strix_carveout(96, 22.6), ComputeMode::Auto, 0, &none);
+        assert!(!ok.warnings.join("").contains("taahhüt"), "{ok:?}");
+        let low = HardwareInfo { commit_available_bytes: Some(20 * G), ..strix_carveout(96, 22.6) };
+        let w = p(&qwen27b_q8(), &low, ComputeMode::Auto, 0, &none);
+        assert!(w.can_start());
+        assert!(w.warnings.join("").contains("taahhüt"), "{w:?}");
+    }
+
+    #[test]
+    fn small_carveout_still_counts_ram() {
+        // Ayrılmış bellek küçükse (eski davranış) GPU'nun kullandığı bellek RAM'den gelir: 22,6 GiB boş RAM'e
+        // 36 GB'lık model sığmaz ve GPU modunda gerçek neden (RAM) söylenir.
+        let none = BTreeSet::new();
+        let hw = strix_carveout(4, 22.6);
+        let g = p(&qwen27b_q8(), &hw, ComputeMode::Gpu, 0, &none);
+        assert!(!g.can_start());
+        assert!(g.blocker.unwrap().contains("RAM"));
+        assert!(!p(&qwen27b_q8(), &hw, ComputeMode::Auto, 0, &none).can_start());
+    }
+
+    #[test]
+    fn carveout_moe_experts_need_ram() {
+        // Uzmanlar RAM'de durur: 57 GiB'lık uzmanlar 22,6 GiB boş RAM'e sığmaz, CPU offload yapılmaz. Model tamamen
+        // GPU'ya sığdığı için engellenmez, GPU'da başlatılır.
+        let none = BTreeSet::new();
+        let r = p(&glm_air(), &strix_carveout(96, 22.6), ComputeMode::Hybrid, 0, &none);
+        assert!(r.can_start(), "{r:?}");
+        assert_eq!(r.placement, "gpu");
+        assert!(r.warnings.join("").contains("RAM yetmiyor"));
     }
 }

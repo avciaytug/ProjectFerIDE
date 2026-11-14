@@ -1,5 +1,21 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.12) — GPU'ya ayrılmış bellek (VRAM) doğru hesaplanıyor
+
+- **AMD Adrenalin'de "Değişken Grafik Belleği" büyütülünce model GPU'da çalışmıyordu:** FerIDE Radeon 8060S gibi
+  tümleşik GPU'ları "belleği RAM ile paylaşan" GPU sayıyor ve modelin boş RAM'e de sığmasını istiyordu. GPU'ya
+  96 GB ayrılıp Windows'a 32 GB RAM kalınca 36 GB'lık model "sığmıyor" deniyordu. FerIDE artık GPU'ya ayrılmış belleği
+  okuyor (Windows: sürücü kaydı, Linux: amdgpu VRAM): model bu kısma sığdığı sürece RAM'den yer kaplamıyor, yalnızca
+  aşan kısım RAM'den sayılıyor. Radeon 8060S (96 GB ayrılmış / 32 GB RAM) üzerinde 27B Q8 modeli tamamen GPU'da,
+  128K bağlamla çalışıyor: 4,8 token/sn (Q4: 12,7 token/sn).
+- GPU modunda gerçek neden RAM yetersizliğiyse artık bu söyleniyor (önceki mesaj yanıltıcı biçimde GPU rakamlarını
+  gösteriyordu).
+- CPU offload (MoE) seçiliyken uzmanlara RAM yetmiyor ama model tamamen GPU'ya sığıyorsa model engellenmiyor, GPU'da
+  başlatılıyor.
+- Windows GPU'ya yüklenen belleği sanal bellek (taahhüt) sınırından da düşüyor; sınır aşılacaksa FerIDE uyarıyor
+  (sayfa dosyası kapalı ya da sabitse model yüklenemez).
+- Donanım bilgisinde ayrılmış GPU belleği gösteriliyor ("96 GiB ayrılmış, kalanı paylaşımlı").
+
 ## beta v5.4 (5.4.0-beta.11) — Çalışan ROCm seçeneği, "Kur / güncelle" düzeltmesi
 
 - **"Kur / güncelle" gerçekten kuruyor:** Model Merkezi'ndeki düğme llama.cpp zaten kuruluysa hiçbir şey yapmıyordu;

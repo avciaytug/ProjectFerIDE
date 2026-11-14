@@ -104,7 +104,7 @@ function render() {
       h('div', { class: 'kv' },
         h('span', { class: 'k' }, 'İşlemci'), `${hw.cpu_name} • ${hw.physical_cores} fiziksel çekirdek`,
         h('span', { class: 'k' }, 'RAM'), `${fmtBytes(hw.ram_total_bytes)} (${fmtBytes(hw.ram_available_bytes)} boş)`,
-        ...hw.gpus.flatMap((g) => [h('span', { class: 'k' }, g.id), `${g.name} — ${fmtBytes(g.total_bytes)} (${fmtBytes(g.free_bytes)} boş)${hw.unified_memory ? ' • paylaşımlı bellek' : ''}`]),
+        ...hw.gpus.flatMap((g) => [h('span', { class: 'k' }, g.id), `${g.name} — ${fmtBytes(g.total_bytes)} (${fmtBytes(g.free_bytes)} boş)${hw.unified_memory ? (hw.dedicated_gpu_bytes >= 2 ** 31 ? ` • ${fmtBytes(hw.dedicated_gpu_bytes)} ayrılmış, kalanı paylaşımlı` : ' • paylaşımlı bellek') : ''}`]),
         hw.gpus.length ? null : h('span', { class: 'k' }, 'GPU'), hw.gpus.length ? null : 'Bulunamadı (llama.cpp kurulduktan sonra ölçülür)',
         h('span', { class: 'k' }, 'Sistem'), hw.os)));
   }
