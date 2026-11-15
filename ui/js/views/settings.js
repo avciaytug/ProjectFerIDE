@@ -114,10 +114,8 @@ const select = (value, opts, onChange) => {
 };
 
 function general(body) {
-  const s = S.settings;
   const hf = h('input', { type: 'password', placeholder: S.secretsSet.includes('hf_token') ? '•••••• (kayıtlı)' : 'hf_…', style: { width: '260px' } });
   body.append(h('div', { class: 'section' },
-    field('Satır kaydırma', null, check(s.editor.word_wrap, (v) => saveSettings({ editor: { word_wrap: v } }), 'Uzun satırları kaydır')),
     field('Hugging Face jetonu', 'Kapalı (gated) modelleri indirmek için. Şifreli saklanır.', h('div', { class: 'row' }, hf,
       h('button', { class: 'btn sm', onclick: async () => { await S.rpc.call('secrets.set', { key: 'hf_token', value: hf.value }); hf.value = ''; await loadSettings(); render(); toast('Kaydedildi', 'ok'); } }, 'Kaydet'),
       S.secretsSet.includes('hf_token') ? h('button', { class: 'btn sm danger', onclick: async () => { await S.rpc.call('secrets.set', { key: 'hf_token', value: '' }); await loadSettings(); render(); } }, 'Sil') : null)),

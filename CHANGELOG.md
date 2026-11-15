@@ -1,5 +1,10 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.16) — Ayarlar'dan "Satır kaydırma" kaldırıldı
+
+- Ayarlar → Genel'den **Satır kaydırma** da kaldırıldı; kod düzenleyici uzun satırları kaydırmadan (yatay kaydırma
+  çubuğuyla) göstermeye devam eder.
+
 ## beta v5.4 (5.4.0-beta.15) — Sadeleşen Ayarlar
 
 - Ayarlar → Genel'den **Tema**, **Yazı boyutu** ve **Sekme genişliği** kaldırıldı. Tema üst çubuktaki güneş/ay
