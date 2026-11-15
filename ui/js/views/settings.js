@@ -117,9 +117,6 @@ function general(body) {
   const s = S.settings;
   const hf = h('input', { type: 'password', placeholder: S.secretsSet.includes('hf_token') ? '•••••• (kayıtlı)' : 'hf_…', style: { width: '260px' } });
   body.append(h('div', { class: 'section' },
-    field('Tema', null, select(s.theme, [['dark', 'Koyu'], ['light', 'Açık']], (v) => saveSettings({ theme: v }))),
-    field('Yazı boyutu (düzenleyici)', null, select(s.editor.font_size, [12, 13, 14, 15, 16, 18].map((n) => [n, `${n} px`]), (v) => saveSettings({ editor: { font_size: Number(v) } }))),
-    field('Sekme genişliği', null, select(s.editor.tab_size, [[2, '2'], [4, '4'], [8, '8']], (v) => saveSettings({ editor: { tab_size: Number(v) } }))),
     field('Satır kaydırma', null, check(s.editor.word_wrap, (v) => saveSettings({ editor: { word_wrap: v } }), 'Uzun satırları kaydır')),
     field('Hugging Face jetonu', 'Kapalı (gated) modelleri indirmek için. Şifreli saklanır.', h('div', { class: 'row' }, hf,
       h('button', { class: 'btn sm', onclick: async () => { await S.rpc.call('secrets.set', { key: 'hf_token', value: hf.value }); hf.value = ''; await loadSettings(); render(); toast('Kaydedildi', 'ok'); } }, 'Kaydet'),
@@ -137,6 +134,7 @@ function general(body) {
     h('div', { class: 'sh' }, h('h3', {}, 'FerIDE hakkında')),
     h('div', { class: 'kv' },
       h('span', { class: 'k' }, 'Sürüm'), `${S.info?.display_version} (${S.info?.version})`,
+      h('span', { class: 'k' }, 'Yapımcı'), 'Aytuğ AVCI',
       h('span', { class: 'k' }, 'Platform'), `${S.info?.os} ${S.info?.arch}`,
       h('span', { class: 'k' }, 'Ajan kabuğu'), S.info?.shell,
       h('span', { class: 'k' }, 'Mimari'), 'Rust çekirdek + yerel sunucu + WebView arayüz')));

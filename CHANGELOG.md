@@ -1,5 +1,12 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.15) — Sadeleşen Ayarlar
+
+- Ayarlar → Genel'den **Tema**, **Yazı boyutu** ve **Sekme genişliği** kaldırıldı. Tema üst çubuktaki güneş/ay
+  düğmesiyle değiştirilir; düzenleyici kayıtlı yazı boyutu ve sekme genişliğini kullanmaya devam eder.
+- **FerIDE hakkında** bölümüne yapımcı eklendi: Aytuğ AVCI.
+- Otomatik güncellemeyle gelen ilk sürüm: beta.14 kullanıcılarına kendiliğinden ulaşır.
+
 ## beta v5.4 (5.4.0-beta.14) — Otomatik güncelleme
 
 - **FerIDE artık kendini güncelliyor:** kurulu FerIDE açıkken GitHub'daki yeni sürümleri denetler (açılıştan
