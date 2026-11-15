@@ -1,5 +1,10 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.17) — Yazı boyutu ayarı geri geldi
+
+- Ayarlar → Genel'e **Yazı boyutu (düzenleyici)** geri eklendi (12–18 px). Kayıtlı değeriniz seçili gelir.
+- Yeni boyut açık dosyalara da hemen uygulanır; önceden yalnızca sonradan açılan dosyalarda geçerli oluyordu.
+
 ## beta v5.4 (5.4.0-beta.16) — Ayarlar'dan "Satır kaydırma" kaldırıldı
 
 - Ayarlar → Genel'den **Satır kaydırma** da kaldırıldı; kod düzenleyici uzun satırları kaydırmadan (yatay kaydırma

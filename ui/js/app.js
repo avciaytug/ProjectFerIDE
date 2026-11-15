@@ -90,11 +90,13 @@ function toggleFocus() {
   Editor.refresh();
 }
 
+/** Görünüm ayarlarını uygula: tema, terminal renkleri, düzenleyici yazı boyutu. */
 function applyTheme() {
   const t = S.settings?.theme === 'light' ? 'light' : 'dark';
   document.documentElement.dataset.theme = t;
   document.getElementById('hljs-theme').href = `vendor/hljs/${t === 'light' ? 'github' : 'github-dark'}.min.css`;
   Bottom.applyTheme?.();
+  Editor.applySettings?.();
 }
 
 // ---------------------------------------------------------------- durum çubuğu

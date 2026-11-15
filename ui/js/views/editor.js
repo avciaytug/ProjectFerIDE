@@ -189,6 +189,18 @@ export async function reloadIfOpen(path) {
 
 export function refresh() { if (active?.cm) active.cm.refresh(); }
 
+/** Ayarlarda yazı boyutu değişince açık dosyalara da hemen uygula. */
+export function applySettings() {
+  const size = `${S.settings?.editor?.font_size || 14}px`;
+  for (const t of tabs) {
+    if (!t.cm) continue;
+    const w = t.cm.getWrapperElement();
+    if (w.style.fontSize === size) continue;
+    w.style.fontSize = size;
+    t.cm.refresh();
+  }
+}
+
 export function showWelcome() {
   if (tabs.length || areaEl.querySelector('.welcome-page')) return;
   const card = (ic, title, text, run) => h('div', { class: 'card', onclick: run }, icon(ic), h('h3', {}, title), h('p', {}, text));
