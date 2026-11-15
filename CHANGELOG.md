@@ -1,5 +1,26 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.18) — Küçük ekran kartları ve Windows Akıllı Uygulama Denetimi
+
+- **6 GB ekran kartında 4 GB'lık model artık tamamen GPU'da çalışıyor.** Örnek: Gemma 4 12B UD-IQ2_M, 32K bağlam,
+  GPU'da ~4,6 GiB. Önceden "7,1 GiB gerekiyor, GPU'da 3,2 GiB kullanılabilir" deniyordu. Nedenleri:
+  - NVIDIA'lı dizüstünde Vulkan listesindeki Intel UHD yüzünden bütün sistem "paylaşımlı bellekli" sayılıyor ve
+    ayrık karttan %35 (2,1 GiB) masaüstü payı düşülüyordu. Artık karar yalnızca modelin çalışacağı karta göre veriliyor;
+    birden çok GPU varsa ayrık kart seçiliyor.
+  - Ayrık kartta güvenlik payı 1 GiB yerine 512 MiB – 2 GiB (kartın ~%6'sı).
+  - Hesap tamponu sabit 1,5 GiB yerine modelin yapısından hesaplanıyor (kelime dağarcığı, FFN genişliği, toplu
+    işlem, bağlam); yinelemeli katmanların durumu da sayılıyor. Tahmin llama.cpp'nin gerçek ölçümlerinin biraz üstünde.
+  - Toplu işlem boyutu (`-ub`) belleğe göre seçiliyor: bol bellekte 2048, küçük kartta 1024/512/256.
+  - Görsel adaptör (mmproj) GPU'ya sığmıyorsa işlemcide çalışıyor (`--no-mmproj-offload`).
+- **GPU modunda seçilen bağlam sığmıyorsa** model engellenmiyor: sığan en büyük bağlamla tamamen GPU'da başlatılıp
+  uyarı gösteriliyor. Hiç sığmıyorsa mesaj neyin ne kadar yer tuttuğunu söylüyor (model, bağlam önbelleği, çalışma alanı).
+- **Windows "Bu uygulamanın bir kısmı engellendi" bildirimleri kesildi.** llama.cpp her açılışta ~14 işlemci çeşidini
+  (`ggml-cpu-*.dll`) ve RPC arka ucunu yüklemeyi deniyordu. Akıllı Uygulama Denetimi bunlardan itibarı olmayanları
+  (ör. bu işlemcinin zaten kullanamadığı `ggml-cpu-skylakex.dll`) her seferinde engelleyip bildirim gösteriyordu.
+  FerIDE artık kullanılan çeşidi öğrenip gerisini `kullanilmayan` alt klasörüne taşıyor; silmiyor.
+- Akıllı Uygulama Denetimi uyarısı yalnızca Windows bir bileşeni gerçekten engellediğinde gösteriliyor. Ayarın açık
+  olması tek başına her açılışta uyarı açtırmıyor.
+
 ## beta v5.4 (5.4.0-beta.17) — Yazı boyutu ayarı geri geldi
 
 - Ayarlar → Genel'e **Yazı boyutu (düzenleyici)** geri eklendi (12–18 px). Kayıtlı değeriniz seçili gelir.

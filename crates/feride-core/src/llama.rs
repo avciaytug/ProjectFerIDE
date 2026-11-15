@@ -333,7 +333,7 @@ impl LlamaManager {
             flags.len()
         );
         let size = gguf::split_parts(&req.model).iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>();
-        let mmproj_extra = find_mmproj(&req.model, &self.model_dirs(settings))
+        let mmproj_bytes = find_mmproj(&req.model, &self.model_dirs(settings))
             .and_then(|m| std::fs::metadata(m).ok())
             .map(|m| m.len() as i64)
             .unwrap_or(0);
@@ -343,7 +343,7 @@ impl LlamaManager {
             hw: &hw,
             mode: req.mode,
             requested_ctx: req.ctx as i64,
-            extra_gpu_bytes: mmproj_extra,
+            mmproj_bytes,
             flags: &flags,
         });
         Ok((plan, info, hw))
@@ -412,8 +412,10 @@ impl LlamaManager {
         if has("--flash-attn") {
             args.extend(["-fa".into(), "on".into()]);
         }
-        args.extend(["-ctk".into(), "q8_0".into(), "-ctv".into(), "q8_0".into(), "-b".into(), "2048".into()]);
-        args.extend(["-ub".into(), if plan.placement == "cpu" { "512".into() } else { "2048".into() }]);
+        args.extend(["-ctk".into(), "q8_0".into(), "-ctv".into(), "q8_0".into()]);
+        // Toplu işlem boyutunu plan seçer: büyük GPU'da 2048 (hızlı istem işleme), küçük GPU'da belleğe sığan değer.
+        let ub = plan.ubatch.clamp(64, 2048);
+        args.extend(["-b".into(), "2048".into(), "-ub".into(), ub.to_string()]);
         if has("--cache-reuse") {
             args.extend(["--cache-reuse".into(), "256".into()]);
         }
@@ -428,6 +430,10 @@ impl LlamaManager {
         }
         if let Some(m) = &mmproj {
             args.extend(["--mmproj".into(), m.to_string_lossy().into()]);
+            // Küçük GPU'da görsel kodlayıcı işlemcide çalışır; GPU belleği modele kalır.
+            if !plan.mmproj_offload && has("--no-mmproj-offload") {
+                args.push("--no-mmproj-offload".into());
+            }
         }
 
         self.log.lock().unwrap().clear();

@@ -44,6 +44,7 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
                 "desktop": st.desktop,
                 "memory_count": core.memory.as_ref().map(|m| m.count()).unwrap_or(0),
                 "smart_app_control": feride_core::winsec::smart_app_control(),
+                "sac_blocked": feride_core::winsec::engine_blocked(),
             })
         }
         "app.quit" => {
@@ -162,6 +163,7 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
                 "deps": core.deps.check(&s),
                 "state": core.deps.state(),
                 "smart_app_control": feride_core::winsec::smart_app_control(),
+                "sac_blocked": feride_core::winsec::engine_blocked(),
                 "sac_help": feride_core::winsec::SAC_HELP,
             })
         }

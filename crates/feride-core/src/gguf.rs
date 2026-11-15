@@ -38,7 +38,16 @@ pub struct GgufInfo {
     pub parts: Vec<PathBuf>,
     pub has_chat_template: bool,
     pub nextn_layers: u64,
+    /// Kelime dağarcığı (çıktı katmanının genişliği); bilinmiyorsa 0.
+    pub vocab_size: u64,
+    /// Bir katmandaki FFN ara genişliği (MoE'de etkin uzmanlar + paylaşılan uzman); bilinmiyorsa 0.
+    pub ffn_width: u64,
+    /// Yinelemeli (SSM / Gated DeltaNet) katmanların bağlamdan bağımsız durum belleği (bayt).
+    pub recurrent_state_bytes: u64,
 }
+
+/// KV önbelleğinin yanında ayrılan küçük tamponlar (döndürme vb.); ölçülen ~19 MiB.
+const KV_EXTRA: u64 = 32 << 20;
 
 impl GgufInfo {
     pub fn is_moe(&self) -> bool {
@@ -48,10 +57,26 @@ impl GgufInfo {
     pub fn dense_bytes(&self) -> u64 {
         self.weight_bytes.saturating_sub(self.expert_bytes)
     }
-    /// `ctx` token bağlam için q8_0 KV önbelleğinin toplam boyutu.
-    pub fn kv_bytes(&self, ctx: u64) -> u64 {
-        let ubatch = 2048;
-        self.full_kv_per_token * ctx + self.swa_kv_per_token * ctx.min(self.sliding_window + ubatch)
+    /// `ctx` token bağlam ve `ubatch` toplu işlem boyutu için q8_0 KV önbelleğinin toplam boyutu. Kayan pencereli
+    /// katmanlar yalnızca pencere + bir toplu işlem kadar hücre tutar (llama.cpp, tek kanal).
+    pub fn kv_bytes(&self, ctx: u64, ubatch: u64) -> u64 {
+        self.full_kv_per_token * ctx
+            + self.swa_kv_per_token * ctx.min(self.sliding_window + ubatch)
+            + self.recurrent_state_bytes
+            + KV_EXTRA
+    }
+    /// llama-server'ın GPU'da ayırdığı hesap tamponu: toplu işlemdeki her token için ara sonuçlar (FFN + gizli
+    /// katman), dikkat maskesi (bağlam × toplu işlem, f16) ve birkaç çıktı tokeninin logitleri. Gerçek sunucu
+    /// ölçümlerinin (Gemma 4 12B, Vulkan: ub 256–2048, bağlam 16K–128K) %10–60 üstünde, güvenli tarafta kalır.
+    /// Mimari bilinmiyorsa `None`.
+    pub fn compute_bytes(&self, ctx: u64, ubatch: u64) -> Option<u64> {
+        if self.embedding_length == 0 {
+            return None;
+        }
+        let embd = self.embedding_length;
+        let ff = if self.ffn_width > 0 { self.ffn_width } else { 4 * embd };
+        let vocab = if self.vocab_size > 0 { self.vocab_size } else { 152_064 };
+        Some(ubatch * 4 * (3 * ff + 5 * embd) + ctx * ubatch * 2 + vocab * 4 * 16 + (64 << 20))
     }
 }
 
@@ -220,6 +245,8 @@ struct Parsed {
     meta: HashMap<String, Val>,
     data_bytes: u64,
     expert_bytes: u64,
+    /// `token_embd.weight` tensörünün ikinci boyutu (kelime sayısı); bu parçada yoksa 0.
+    vocab: u64,
 }
 
 fn parse_file(path: &Path, want_meta: bool) -> std::io::Result<Parsed> {
@@ -263,12 +290,23 @@ fn parse_file(path: &Path, want_meta: bool) -> std::io::Result<Parsed> {
     }
     let mut names = Vec::with_capacity(tensor_count as usize);
     let mut offsets = Vec::with_capacity(tensor_count as usize);
+    let mut vocab = 0u64;
     for _ in 0..tensor_count {
-        names.push(r.string()?);
+        let name = r.string()?;
         let n_dims = r.u32()?;
-        r.skip(8 * n_dims as u64)?;
+        if n_dims > 8 {
+            return Err(bad("geçersiz tensör boyutu"));
+        }
+        let mut dims = [0u64; 8];
+        for d in dims.iter_mut().take(n_dims as usize) {
+            *d = r.u64()?;
+        }
+        if name == "token_embd.weight" && n_dims >= 2 {
+            vocab = dims[1];
+        }
         r.u32()?; // ggml tipi
         offsets.push(r.u64()?);
+        names.push(name);
     }
     let pos = r.pos()?;
     let data_start = pos.div_ceil(alignment) * alignment;
@@ -282,7 +320,7 @@ fn parse_file(path: &Path, want_meta: bool) -> std::io::Result<Parsed> {
             expert += end.saturating_sub(offsets[i]);
         }
     }
-    Ok(Parsed { meta, data_bytes, expert_bytes: expert })
+    Ok(Parsed { meta, data_bytes, expert_bytes: expert, vocab })
 }
 
 pub fn read(path: &Path) -> Option<GgufInfo> {
@@ -300,6 +338,7 @@ fn read_inner(path: &Path) -> std::io::Result<GgufInfo> {
     let mut meta = HashMap::new();
     let mut weight = 0u64;
     let mut expert = 0u64;
+    let mut vocab = 0u64;
     for (i, p) in parts.iter().enumerate() {
         let r = parse_file(p, i == 0)?;
         if i == 0 {
@@ -307,6 +346,7 @@ fn read_inner(path: &Path) -> std::io::Result<GgufInfo> {
         }
         weight += r.data_bytes;
         expert += r.expert_bytes;
+        vocab = vocab.max(r.vocab);
     }
     let arch = match meta.get("general.architecture") {
         Some(Val::S(s)) => s.clone(),
@@ -347,10 +387,12 @@ fn read_inner(path: &Path) -> std::io::Result<GgufInfo> {
 
     let mut full = 0.0f64;
     let mut swa = 0.0f64;
+    let mut n_recurrent = 0u64;
     for i in 0..kv_layers as usize {
         let is_recurrent = idx_bool(&recurrent, i)
             .unwrap_or(full_interval > 1 && !(i as u64 + 1).is_multiple_of(full_interval));
         if is_recurrent {
+            n_recurrent += 1;
             continue;
         }
         let kv_heads = match &kv_heads_raw {
@@ -372,6 +414,18 @@ fn read_inner(path: &Path) -> std::io::Result<GgufInfo> {
     if layers == 0 {
         full = 128.0 * 1024.0; // bilinmeyen model: kötümser tahmin
     }
+    // Yinelemeli katmanların durumu (Mamba2, Gated DeltaNet): iç boyut × durum boyutu (f32) + evrişim durumu.
+    // Qwen3.8 27B'de katman başına ~3,1 MiB (ölçülen toplam 150 MiB). Anahtarlar yoksa katman başına 1 MiB.
+    let (ssm_inner, ssm_state) = (num("ssm.inner_size"), num("ssm.state_size"));
+    let per_recurrent = if ssm_inner > 0 && ssm_state > 0 {
+        ssm_inner * ssm_state * 4 + num("ssm.conv_kernel").saturating_sub(1) * (ssm_inner + 2 * num("ssm.group_count") * ssm_state) * 4
+    } else {
+        1 << 20
+    };
+    // FFN ara genişliği: yoğun katman ya da (MoE) etkin uzmanlar + paylaşılan uzman; hangisi büyükse.
+    let expert_ff = num("expert_feed_forward_length");
+    let experts_used = num("expert_used_count").max(u64::from(expert_ff > 0));
+    let ffn_width = num("feed_forward_length").max(expert_ff * experts_used + num("expert_shared_feed_forward_length"));
 
     Ok(GgufInfo {
         architecture: arch.clone(),
@@ -392,6 +446,9 @@ fn read_inner(path: &Path) -> std::io::Result<GgufInfo> {
         parts,
         has_chat_template: meta.contains_key("tokenizer.chat_template"),
         nextn_layers: nextn,
+        vocab_size: vocab,
+        ffn_width,
+        recurrent_state_bytes: n_recurrent * per_recurrent,
     })
 }
 
@@ -399,6 +456,22 @@ fn read_inner(path: &Path) -> std::io::Result<GgufInfo> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Elle: `FERIDE_TEST_GGUF=<model.gguf> cargo test -p feride-core -- --ignored --nocapture print_real_gguf`
+    #[test]
+    #[ignore]
+    fn print_real_gguf() {
+        let p = std::env::var("FERIDE_TEST_GGUF").unwrap();
+        let i = read(Path::new(&p)).expect("okunamadı");
+        println!("{i:#?}");
+        for (c, ub) in [(16384u64, 512u64), (131072, 2048)] {
+            println!(
+                "ctx {c} ub {ub}: kv {} MiB, hesap {} MiB",
+                i.kv_bytes(c, ub) >> 20,
+                i.compute_bytes(c, ub).unwrap_or(0) >> 20
+            );
+        }
+    }
 
     #[test]
     fn split() {

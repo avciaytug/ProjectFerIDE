@@ -13,11 +13,19 @@ use crate::gguf::GgufInfo;
 use crate::hardware::HardwareInfo;
 
 pub const GIB: i64 = 1 << 30;
+const MIB: i64 = 1 << 20;
 pub const CTX_STEPS: [i64; 6] = [131072, 65536, 32768, 16384, 8192, 4096];
 /// Ajanın rahat çalışması için en küçük bağlam (talimat + araç tanımları ~5K token).
 pub const MIN_AGENT_CTX: i64 = 16384;
+/// Mimarisi okunamayan modellerde GPU hesap tamponu tahmini.
 pub const COMPUTE_OVERHEAD: i64 = 3 * GIB / 2;
 pub const RAM_SAFETY: i64 = 4 * GIB;
+/// GPU'da denenecek toplu işlem (`-ub`) boyutları. Büyüğü uzun istemleri daha hızlı işler; hesap tamponu ve kayan
+/// pencereli KV önbelleği onunla büyüdüğü için küçük GPU'larda küçüğü seçilir (Gemma 4 12B, ölçülen: 2048'de
+/// 0,55 GiB, 512'de 0,14 GiB hesap tamponu).
+pub const UB_STEPS: [i64; 4] = [2048, 1024, 512, 256];
+/// İşlemcide ve küçük GPU'lu karma yerleşimde kullanılan toplu işlem boyutu.
+pub const SMALL_UBATCH: i64 = 512;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LaunchPlan {
@@ -25,6 +33,11 @@ pub struct LaunchPlan {
     /// gpu | mixed | moe-cpu | cpu
     pub placement: String,
     pub ctx: i64,
+    /// llama-server `-ub` (fiziksel toplu işlem boyutu).
+    pub ubatch: i64,
+    /// Görsel adaptör (mmproj) GPU'ya yüklensin mi? `false`: işlemcide çalışır (`--no-mmproj-offload`), GPU belleği
+    /// modele kalır.
+    pub mmproj_offload: bool,
     pub args: Vec<String>,
     pub summary: String,
     pub warnings: Vec<String>,
@@ -54,13 +67,47 @@ pub struct PlanInput<'a> {
     pub hw: &'a HardwareInfo,
     pub mode: ComputeMode,
     pub requested_ctx: i64,
-    pub extra_gpu_bytes: i64,
+    /// Görsel adaptör (mmproj) dosyasının boyutu; yoksa 0.
+    pub mmproj_bytes: i64,
     /// Kurulu llama-server'ın desteklediği seçenekler; boşsa güncel sürüm varsayılır.
     pub flags: &'a BTreeSet<String>,
 }
 
+/// Bir GPU yerleşimi adayı: bağlam, toplu işlem boyutu ve görsel adaptörün GPU'da olup olmadığı.
+#[derive(Clone, Copy, Debug)]
+struct Fit {
+    ctx: i64,
+    ub: i64,
+    vision_gpu: bool,
+}
+
+/// Ajanın rahat çalıştığı bağlam: buna kadar bağlam her şeyden önce gelir.
+const COMFORT_CTX: i64 = 32768;
+
+/// Uygun adaylar arasından en iyisini seçer. Tercih sırası: bağlam (32K'ya kadar; ajan için en önemlisi), büyük toplu
+/// işlem (uzun istemleri hızlı işler), görsel adaptör GPU'da, daha da büyük bağlam. `max_ctx`: kullanıcı belirli bir
+/// bağlam istediyse sığan en büyük bağlam önce gelir.
+fn pick(ctxs: &[i64], ubs: &[i64], vision_opts: &[bool], max_ctx: bool, ok: impl Fn(Fit) -> bool) -> Option<Fit> {
+    let mut best: Option<(Fit, (i64, i64, bool, i64))> = None;
+    for &ctx in ctxs {
+        for &ub in ubs {
+            for &vision_gpu in vision_opts {
+                let f = Fit { ctx, ub, vision_gpu };
+                if !ok(f) {
+                    continue;
+                }
+                let key = if max_ctx { (ctx, ub, vision_gpu, 0) } else { (ctx.min(COMFORT_CTX), ub, vision_gpu, ctx) };
+                if best.as_ref().is_none_or(|(_, b)| key > *b) {
+                    best = Some((f, key));
+                }
+            }
+        }
+    }
+    best.map(|(f, _)| f)
+}
+
 pub fn plan(inp: PlanInput) -> LaunchPlan {
-    let PlanInput { model_bytes, info, hw, mode, requested_ctx, extra_gpu_bytes, flags } = inp;
+    let PlanInput { model_bytes, info, hw, mode, requested_ctx, mmproj_bytes, flags } = inp;
     let has = |f: &str| flags.is_empty() || flags.contains(f);
     let no_mmap: Vec<String> = if has("--load-mode") {
         s(&["--load-mode", "none"])
@@ -79,8 +126,20 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
     let can_fit = has("--fit");
     let weights = info.map(|i| i.weight_bytes as i64).unwrap_or(model_bytes);
     let train_ctx = info.map(|i| i.context_length as i64).unwrap_or(0);
-    let kv = |c: i64| -> i64 { info.map(|i| i.kv_bytes(c as u64) as i64).unwrap_or(c * 128 * 1024) };
-    let overhead = COMPUTE_OVERHEAD + extra_gpu_bytes;
+    let kv = |c: i64, ub: i64| -> i64 { info.map(|i| i.kv_bytes(c as u64, ub as u64) as i64).unwrap_or(c * 128 * 1024) };
+    let compute = |c: i64, ub: i64| -> i64 {
+        info.and_then(|i| i.compute_bytes(c as u64, ub as u64)).map(|b| b as i64).unwrap_or(COMPUTE_OVERHEAD)
+    };
+    // Görsel adaptör: dosya + görüntü kodlama tamponu. Güncel llama.cpp onu işlemcide de çalıştırabilir.
+    let vision = if mmproj_bytes > 0 { mmproj_bytes + (256 * MIB).max(mmproj_bytes / 2) } else { 0 };
+    let vision_cpu_ok = vision > 0 && has("--no-mmproj-offload");
+    let vision_opts: &[bool] = if vision == 0 {
+        &[false]
+    } else if vision_cpu_ok {
+        &[true, false]
+    } else {
+        &[true]
+    };
     let threads = vec!["-t".to_string(), hw.physical_cores.max(1).to_string()];
 
     let mut cands: Vec<i64> = if requested_ctx > 0 {
@@ -114,8 +173,11 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
     } else if hw.unified_memory {
         (8 * GIB).max((gpu_total as f64 * 0.12).round() as i64).min((gpu_total as f64 * 0.35).round() as i64)
     } else {
-        GIB.max((gpu_total as f64 * 0.06).round() as i64)
+        // Ayrık kart: o an boş bellek zaten ölçülüyor ve tahmin gerçek kullanımın üstünde kalıyor; dizüstünde
+        // masaüstü genellikle tümleşik GPU'da çalışır. 512 MiB – 2 GiB pay yeter.
+        (512 * MIB).max((gpu_total as f64 * 0.06).round() as i64).min(2 * GIB)
     };
+    let pay = if hw.unified_memory { "masaüstü payı" } else { "güvenlik payı" };
     let gpu_budget = if has_gpu { gpu_free - reserve } else { 0 };
     let is_vulkan = gpu.map(|g| g.is_vulkan()).unwrap_or(false);
     let vulkan_args: Vec<String> =
@@ -167,13 +229,23 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
     };
 
     let mk = |placement: &str, ctx: i64, args: Vec<String>, summary: String, warnings: Vec<String>, blocker: Option<String>| {
-        LaunchPlan { mode, placement: placement.into(), ctx, args, summary, warnings, blocker }
+        LaunchPlan {
+            mode,
+            placement: placement.into(),
+            ctx,
+            ubatch: UB_STEPS[0],
+            mmproj_offload: true,
+            args,
+            summary,
+            warnings,
+            blocker,
+        }
     };
 
     let cpu_plan = |pre_warnings: Vec<String>| -> LaunchPlan {
         for &c in &cands {
-            let need = weights + kv(c) + GIB / 2;
-            if need <= ram_budget && (fixed_ctx || c <= floor || kv(c) as f64 <= ram_budget as f64 * 0.2) {
+            let need = weights + kv(c, SMALL_UBATCH) + GIB / 2 + vision;
+            if need <= ram_budget && (fixed_ctx || c <= floor || kv(c, SMALL_UBATCH) as f64 <= ram_budget as f64 * 0.2) {
                 let mut w = pre_warnings.clone();
                 if fixed_ctx && c < requested_ctx {
                     w.push(format!("Bağlam modelin eğitim sınırına ({}) indirildi.", k(c)));
@@ -184,14 +256,18 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
                 let mut args = s(&["--device", "none", "-ngl", "0", "-c"]);
                 args.push(c.to_string());
                 args.extend(threads.clone());
-                return mk(
-                    "cpu",
-                    c,
-                    args,
-                    format!("Yalnızca CPU • {} çekirdek • bağlam {} • RAM ~{} GiB", hw.physical_cores, k(c), g(need)),
-                    w,
-                    None,
-                );
+                return LaunchPlan {
+                    ubatch: SMALL_UBATCH,
+                    mmproj_offload: false,
+                    ..mk(
+                        "cpu",
+                        c,
+                        args,
+                        format!("Yalnızca CPU • {} çekirdek • bağlam {} • RAM ~{} GiB", hw.physical_cores, k(c), g(need)),
+                        w,
+                        None,
+                    )
+                };
             }
         }
         mk(
@@ -203,7 +279,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
             Some(format!(
                 "Model RAM'e sığmıyor: {} GiB gerekiyor, kullanılabilir RAM {} GiB. Daha küçük (daha düşük kuantize) bir \
                  model seçin veya açık uygulamaları kapatın.",
-                g(weights + kv(last)),
+                g(weights + kv(last, SMALL_UBATCH) + vision),
                 g(ram_budget.max(0))
             )),
         )
@@ -227,19 +303,44 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
     }
 
     // ---------------------------------------------- tamamı GPU'ya sığıyor mu?
-    let mut full_gpu_ctx: Option<i64> = None;
-    for &c in &cands {
-        let need = weights + kv(c) + overhead;
-        if need <= gpu_budget && fits_total(need) && (fixed_ctx || c <= floor || kv(c) as f64 <= gpu_budget as f64 * 0.25) {
-            full_gpu_ctx = Some(c);
-            break;
-        }
-    }
+    // GPU'da duracak bellek: ağırlıklar + KV önbelleği + hesap tamponu (+ görsel adaptör GPU'daysa).
+    let need_of = |f: Fit| -> i64 { weights + kv(f.ctx, f.ub) + compute(f.ctx, f.ub) + if f.vision_gpu { vision } else { 0 } };
+    let fits_gpu = |f: Fit| -> bool {
+        need_of(f) <= gpu_budget && fits_total(weights + kv(f.ctx, f.ub) + compute(f.ctx, f.ub) + vision)
+    };
+    // Büyük bağlam KV önbelleği için GPU'nun en fazla dörtte biri ayrılır (ajan tabanı ve altı her zaman serbest).
+    let kv_share_ok = |f: Fit| -> bool { fixed_ctx || f.ctx <= floor || kv(f.ctx, f.ub) as f64 <= gpu_budget as f64 * 0.25 };
+    let full: Option<Fit> = pick(&cands, &UB_STEPS, vision_opts, false, |f| fits_gpu(f) && kv_share_ok(f));
     let uma_no_mmap: Vec<String> = if hw.unified_memory { no_mmap.clone() } else { vec![] };
+    let vision_note = |f: Fit| -> &'static str {
+        if vision > 0 && !f.vision_gpu {
+            " • görsel kodlayıcı işlemcide"
+        } else {
+            ""
+        }
+    };
 
     if mode == ComputeMode::Gpu {
-        let Some(fc) = full_gpu_ctx else {
-            let need = weights + kv(last) + overhead;
+        let mut w = vec![];
+        let mut chosen = full;
+        // Kullanıcının seçtiği bağlam sığmıyorsa sığan en büyük bağlamla tamamen GPU'da çalıştır (uyararak).
+        if chosen.is_none() && fixed_ctx {
+            let lower: Vec<i64> =
+                CTX_STEPS.iter().copied().filter(|c| *c < cands[0] && (train_ctx <= 0 || *c <= train_ctx)).collect();
+            if let Some(f) = pick(&lower, &UB_STEPS, vision_opts, true, fits_gpu) {
+                w.push(format!(
+                    "Seçtiğiniz {} bağlam GPU belleğine sığmıyor; model tamamen GPU'da {} bağlamla çalışıyor. Daha uzun \
+                     bağlam için \"Otomatik\" modu seçin (modelin bir kısmı RAM'de tutulur).",
+                    k(cands[0]),
+                    k(f.ctx)
+                ));
+                chosen = Some(f);
+            }
+        }
+        let Some(f) = chosen else {
+            let min_ctx = CTX_STEPS[CTX_STEPS.len() - 1].min(if train_ctx > 0 { train_ctx } else { i64::MAX }).min(last);
+            let min = Fit { ctx: min_ctx, ub: UB_STEPS[UB_STEPS.len() - 1], vision_gpu: vision > 0 && !vision_cpu_ok };
+            let need = need_of(min);
             let msg = if need <= gpu_budget {
                 // GPU'ya sığıyor; ama GPU bu belleğin bir kısmını sistem RAM'inden alıyor ve boş RAM yetmiyor.
                 format!(
@@ -252,87 +353,110 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
                 )
             } else {
                 format!(
-                    "Model GPU belleğine sığmıyor: {} GiB gerekiyor, GPU'da {} GiB kullanılabilir (masaüstü için {} GiB pay \
-                     bırakılıyor). \"Otomatik\" veya \"CPU offload\" modunu seçin.{}",
+                    "Model GPU belleğine sığmıyor: en küçük ayarla ({} bağlam) bile {} GiB gerekiyor — model {} GiB, bağlam \
+                     önbelleği {} GiB, çalışma alanı {} GiB{} — GPU'da ise {} GiB kullanılabilir ({} GiB {} bırakılıyor). \
+                     \"Otomatik\" ya da \"CPU offload\" modunu seçin (modelin bir kısmı RAM'de çalışır) veya daha düşük \
+                     kuantize bir sürüm seçin.{}",
+                    k(min.ctx),
                     g(need),
+                    g(weights),
+                    g(kv(min.ctx, min.ub)),
+                    g(compute(min.ctx, min.ub)),
+                    if min.vision_gpu { format!(", görsel adaptör {} GiB", g(vision)) } else { String::new() },
                     g(gpu_budget.max(0)),
                     g(reserve),
+                    pay,
                     raise_hint.as_ref().map(|h| format!("\n\n{h}")).unwrap_or_default()
                 )
             };
-            return mk("gpu", last, vec![], String::new(), vec![], Some(msg));
+            return mk("gpu", min.ctx, vec![], String::new(), vec![], Some(msg));
         };
         let mut args = vulkan_args.clone();
         args.extend(["-ngl".to_string(), ngl_all.to_string()]);
         if can_fit {
             args.extend(s(&["--fit", "off"]));
         }
-        args.extend(["-c".to_string(), fc.to_string()]);
+        args.extend(["-c".to_string(), f.ctx.to_string()]);
         args.extend(threads.clone());
         args.extend(uma_no_mmap.clone());
-        let mut w = vec![];
-        w.extend(commit_warning(weights + kv(fc) + overhead));
-        if small_ctx_warning(fc).is_some() {
+        w.extend(commit_warning(need_of(f)));
+        if small_ctx_warning(f.ctx).is_some() {
             w.push(format!(
                 "Bağlam yalnızca {}: GPU belleği daha fazlasına yetmiyor. \"Otomatik\" mod bağlamın bir kısmını RAM'de \
                  tutarak {} ve üstüne çıkabilir.",
-                k(fc),
+                k(f.ctx),
                 k(MIN_AGENT_CTX)
             ));
         }
-        return mk(
-            "gpu",
-            fc,
-            args,
-            format!("Tamamı GPU'da • bağlam {} • GPU ~{} GiB", k(fc), g(weights + kv(fc) + overhead)),
-            w,
-            None,
-        );
+        return LaunchPlan {
+            ubatch: f.ub,
+            mmproj_offload: f.vision_gpu || vision == 0,
+            ..mk(
+                "gpu",
+                f.ctx,
+                args,
+                format!("Tamamı GPU'da • bağlam {} • GPU ~{} GiB{}", k(f.ctx), g(need_of(f)), vision_note(f)),
+                w,
+                None,
+            )
+        };
     }
 
     // ------------------------------------------- CPU offload: MoE uzmanları RAM'de
     if mode == ComputeMode::Hybrid {
         if let Some(info) = info.filter(|i| i.is_moe()) {
-            for &c in &cands {
-                let gpu_need = info.dense_bytes() as i64 + kv(c) + overhead;
-                let total = weights + kv(c) + overhead;
-                if gpu_need <= gpu_budget
-                    && fits_total(total)
+            let moe_need = |f: Fit| -> i64 {
+                info.dense_bytes() as i64 + kv(f.ctx, f.ub) + compute(f.ctx, f.ub) + if f.vision_gpu { vision } else { 0 }
+            };
+            let moe_ok = |f: Fit| -> bool {
+                let gpu_need = moe_need(f);
+                gpu_need <= gpu_budget
+                    && fits_total(weights + kv(f.ctx, f.ub) + compute(f.ctx, f.ub) + vision)
                     && info.expert_bytes as i64 + ram_for_gpu(gpu_need) <= ram_budget
-                    && (fixed_ctx || c <= floor || kv(c) as f64 <= gpu_budget as f64 * 0.35)
-                {
-                    let mut args = vulkan_args.clone();
-                    args.extend(["-ngl".to_string(), ngl_all.to_string()]);
-                    args.extend(cpu_moe.clone());
-                    if can_fit {
-                        args.extend(s(&["--fit", "off"]));
-                    }
-                    if is_vulkan {
-                        args.extend(no_host.clone());
-                    }
-                    args.extend(["-c".to_string(), c.to_string()]);
-                    args.extend(threads.clone());
-                    let mut w = vec![];
-                    w.extend(commit_warning(gpu_need));
-                    if fixed_ctx && c < requested_ctx {
-                        w.push(format!("Bağlam modelin eğitim sınırına ({}) indirildi.", k(c)));
-                    }
-                    return mk(
+                    && (fixed_ctx || f.ctx <= floor || kv(f.ctx, f.ub) as f64 <= gpu_budget as f64 * 0.35)
+            };
+            // Uzmanlar işlemcideyken uzun istemleri büyük toplu işlem hızlandırır; 256'ya inilmez.
+            if let Some(f) = pick(&cands, &UB_STEPS[..3], vision_opts, false, moe_ok) {
+                let gpu_need = moe_need(f);
+                let mut args = vulkan_args.clone();
+                args.extend(["-ngl".to_string(), ngl_all.to_string()]);
+                args.extend(cpu_moe.clone());
+                if can_fit {
+                    args.extend(s(&["--fit", "off"]));
+                }
+                if is_vulkan {
+                    args.extend(no_host.clone());
+                }
+                args.extend(["-c".to_string(), f.ctx.to_string()]);
+                args.extend(threads.clone());
+                let mut w = vec![];
+                w.extend(commit_warning(gpu_need));
+                if fixed_ctx && f.ctx < requested_ctx {
+                    w.push(format!("Bağlam modelin eğitim sınırına ({}) indirildi.", k(f.ctx)));
+                }
+                if let Some(x) = small_ctx_warning(f.ctx) {
+                    w.push(x);
+                }
+                return LaunchPlan {
+                    ubatch: f.ub,
+                    mmproj_offload: f.vision_gpu || vision == 0,
+                    ..mk(
                         "moe-cpu",
-                        c,
+                        f.ctx,
                         args,
                         format!(
-                            "MoE uzmanları RAM'de ({} GiB), dikkat katmanları ve bağlam GPU'da (~{} GiB) • bağlam {}",
+                            "MoE uzmanları RAM'de ({} GiB), dikkat katmanları ve bağlam GPU'da (~{} GiB) • bağlam {}{}",
                             g(info.expert_bytes as i64),
                             g(gpu_need),
-                            k(c)
+                            k(f.ctx),
+                            vision_note(f)
                         ),
                         w,
                         None,
-                    );
-                }
+                    )
+                };
             }
-            if full_gpu_ctx.is_none() {
+            if full.is_none() {
                 return mk(
                     "moe-cpu",
                     last,
@@ -341,7 +465,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
                     vec![],
                     Some(format!(
                         "Model bu bilgisayarın belleğine sığmıyor: {} GiB gerekiyor. Daha düşük kuantize bir sürüm seçin.",
-                        g(weights + kv(last) + overhead)
+                        g(weights + kv(last, SMALL_UBATCH) + compute(last, SMALL_UBATCH) + vision)
                     )),
                 );
             }
@@ -358,7 +482,9 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
             "Bu model MoE değil; katmanlar GPU ve RAM arasında otomatik paylaştırılıyor.".to_string()
         });
     }
-    let fit_args = |ctx: i64| -> Vec<String> {
+    // Karma yerleşimde GPU'nun her baytı katmanlara gitsin: küçük GPU'da küçük toplu işlem.
+    let mixed_ub = if gpu_budget < 16 * GIB { SMALL_UBATCH } else { UB_STEPS[0] };
+    let fit_args = |ctx: i64, ub: i64| -> Vec<String> {
         if can_fit {
             let mut a = s(&["--fit", "on", "--fit-target"]);
             a.push((reserve >> 20).to_string());
@@ -370,52 +496,68 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
         }
         let layers = info.map(|i| i.block_count as i64).unwrap_or(48).max(1);
         let per_layer = weights as f64 / layers as f64;
-        let n = (((gpu_budget - kv(ctx) - overhead) as f64 / per_layer).floor() as i64).clamp(0, layers);
+        let n = (((gpu_budget - kv(ctx, ub) - compute(ctx, ub)) as f64 / per_layer).floor() as i64).clamp(0, layers);
         vec!["-ngl".into(), n.to_string()]
     };
-    let full_gpu_plan = |fc: i64| -> LaunchPlan {
+    let full_gpu_plan = |f: Fit| -> LaunchPlan {
         let mut args = vulkan_args.clone();
-        args.extend(fit_args(fc));
-        args.extend(["-c".to_string(), fc.to_string()]);
+        if hw.unified_memory {
+            args.extend(fit_args(f.ctx, f.ub));
+        } else {
+            // Ayrık kartta llama.cpp'nin kendi sığdırma tahmini (bütün toplu işlemin logitlerini sayar) gerçeğin çok
+            // üstünde kalıyor ve küçük kartlarda gereksiz yere katman taşıyor; plan zaten sığdığını hesapladı.
+            args.extend(["-ngl".to_string(), ngl_all.to_string()]);
+            if can_fit {
+                args.extend(s(&["--fit", "off"]));
+            }
+        }
+        args.extend(["-c".to_string(), f.ctx.to_string()]);
         args.extend(threads.clone());
         args.extend(uma_no_mmap.clone());
         let mut w = base_warnings.clone();
-        w.extend(commit_warning(weights + kv(fc) + overhead));
-        if let Some(x) = small_ctx_warning(fc) {
+        w.extend(commit_warning(need_of(f)));
+        if let Some(x) = small_ctx_warning(f.ctx) {
             w.push(x);
         }
-        mk(
-            "gpu",
-            fc,
-            args,
-            format!(
-                "Tamamı GPU'da • bağlam {} • GPU ~{} GiB ({} GiB masaüstü payı)",
-                k(fc),
-                g(weights + kv(fc) + overhead),
-                g(reserve)
-            ),
-            w,
-            None,
-        )
+        LaunchPlan {
+            ubatch: f.ub,
+            mmproj_offload: f.vision_gpu || vision == 0,
+            ..mk(
+                "gpu",
+                f.ctx,
+                args,
+                format!(
+                    "Tamamı GPU'da • bağlam {} • GPU ~{} GiB ({} GiB {}){}",
+                    k(f.ctx),
+                    g(need_of(f)),
+                    g(reserve),
+                    pay,
+                    vision_note(f)
+                ),
+                w,
+                None,
+            )
+        }
     };
-    if let Some(fc) = full_gpu_ctx {
-        if fc >= floor || fixed_ctx {
-            return full_gpu_plan(fc);
+    if let Some(f) = full {
+        if f.ctx >= floor || fixed_ctx {
+            return full_gpu_plan(f);
         }
     }
+    let ub = mixed_ub;
     for &c in &cands {
-        let total = weights + kv(c) + overhead;
-        let small = fixed_ctx || c <= floor || (kv(c) as f64 <= gpu_budget as f64 * 0.08 && c <= 32768);
+        let total = weights + kv(c, ub) + compute(c, ub) + vision;
+        let small = fixed_ctx || c <= floor || (kv(c, ub) as f64 <= gpu_budget as f64 * 0.08 && c <= 32768);
         if small && fits_total(total) {
-            if let Some(fc) = full_gpu_ctx {
-                if c <= fc {
-                    return full_gpu_plan(fc);
+            if let Some(f) = full {
+                if c <= f.ctx {
+                    return full_gpu_plan(f);
                 }
             }
-            let on_gpu = (gpu_budget - kv(c) - overhead).max(0);
+            let on_gpu = (gpu_budget - kv(c, ub) - compute(c, ub)).max(0);
             let pct = (on_gpu.min(weights) as f64 * 100.0 / weights.max(1) as f64).round() as i64;
             let mut args = vulkan_args.clone();
-            args.extend(fit_args(c));
+            args.extend(fit_args(c, ub));
             args.extend(["-c".to_string(), c.to_string()]);
             args.extend(threads.clone());
             if is_vulkan {
@@ -430,18 +572,26 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
             if let Some(x) = small_ctx_warning(c) {
                 w.push(x);
             }
-            return mk(
-                "mixed",
-                c,
-                args,
-                format!(
-                    "GPU + RAM karma • modelin ~%{pct}'i GPU'da, kalanı RAM'de • bağlam {} • {} GiB masaüstü payı",
-                    k(c),
-                    g(reserve)
-                ),
-                w,
-                None,
-            );
+            // GPU belleği katmanlara kalsın: görsel adaptör mümkünse işlemcide.
+            let offload = vision == 0 || !vision_cpu_ok;
+            return LaunchPlan {
+                ubatch: ub,
+                mmproj_offload: offload,
+                ..mk(
+                    "mixed",
+                    c,
+                    args,
+                    format!(
+                        "GPU + RAM karma • modelin ~%{pct}'i GPU'da, kalanı RAM'de • bağlam {} • {} GiB {}{}",
+                        k(c),
+                        g(reserve),
+                        pay,
+                        if offload { "" } else { " • görsel kodlayıcı işlemcide" }
+                    ),
+                    w,
+                    None,
+                )
+            };
         }
     }
     mk(
@@ -453,7 +603,7 @@ pub fn plan(inp: PlanInput) -> LaunchPlan {
         Some(format!(
             "Model bu bilgisayarın belleğine sığmıyor: {} GiB gerekiyor, kullanılabilir toplam {} GiB. Daha düşük kuantize \
              bir sürüm seçin veya açık uygulamaları kapatın.",
-            g(weights + kv(last) + overhead),
+            g(weights + kv(last, ub) + compute(last, ub) + vision),
             g(total_capacity.max(0))
         )),
     )
@@ -526,7 +676,7 @@ mod tests {
             hw,
             mode,
             requested_ctx: req,
-            extra_gpu_bytes: 0,
+            mmproj_bytes: 0,
             flags,
         })
     }
@@ -703,7 +853,7 @@ mod tests {
         assert!(r.args.join(" ").contains("--fit-ctx 16384"));
         let c = p(&gemma, &laptop, ComputeMode::Cpu, 0, &none);
         assert!(c.ctx >= MIN_AGENT_CTX);
-        let tiny = HardwareInfo { ram_total_bytes: 8 * G, ram_available_bytes: (10.5 * G as f64) as u64, physical_cores: 4, gpus: vec![], ..laptop.clone() };
+        let tiny = HardwareInfo { ram_total_bytes: 8 * G, ram_available_bytes: 10 * G, physical_cores: 4, gpus: vec![], ..laptop.clone() };
         let t = p(&gemma, &tiny, ComputeMode::Auto, 0, &none);
         assert!(t.can_start());
         assert!(t.ctx < MIN_AGENT_CTX);
@@ -794,6 +944,133 @@ mod tests {
         assert!(!g.can_start());
         assert!(g.blocker.unwrap().contains("RAM"));
         assert!(!p(&qwen27b_q8(), &hw, ComputeMode::Auto, 0, &none).can_start());
+    }
+
+    /// Gemma 4 12B UD-IQ2_M (3,9 GiB): değerler gerçek GGUF başlığından (FerIDE'nin kendi okuyucusuyla).
+    fn gemma4_iq2() -> GgufInfo {
+        GgufInfo {
+            architecture: "gemma4".into(),
+            block_count: 48,
+            context_length: 262144,
+            embedding_length: 3840,
+            full_kv_per_token: 8704,
+            swa_kv_per_token: 174080,
+            sliding_window: 1024,
+            weight_bytes: 4_197_529_088,
+            vocab_size: 262144,
+            ffn_width: 15360,
+            ..Default::default()
+        }
+    }
+    const GEMMA4_MMPROJ: i64 = 175_115_840;
+
+    /// Kullanıcının ikinci bilgisayarı: ASUS ROG Strix (i7-9750H), 6 GB NVIDIA, 5,3 GiB boş. Vulkan derlemesinde
+    /// listede Intel UHD de vardı ve eskiden bütün sistem "paylaşımlı bellek" sayılıyordu.
+    fn rog_strix(id: &str) -> HardwareInfo {
+        HardwareInfo {
+            ram_total_bytes: 16 * G,
+            ram_available_bytes: 9 * G,
+            physical_cores: 6,
+            gpus: vec![GpuDevice {
+                id: id.into(),
+                name: "NVIDIA GeForce RTX 2060".into(),
+                total_bytes: 6144 * MIB,
+                free_bytes: 5427 * MIB,
+            }],
+            unified_memory: false,
+            gpu_memory_limit_bytes: None,
+            suggested_gpu_memory_limit_bytes: None,
+            dedicated_gpu_bytes: None,
+            commit_available_bytes: Some(20 * G),
+            os: String::new(),
+            cpu_name: String::new(),
+        }
+    }
+
+    fn pm(info: &GgufInfo, hw: &HardwareInfo, mode: ComputeMode, req: i64, mmproj: i64) -> LaunchPlan {
+        let none = BTreeSet::new();
+        plan(PlanInput { model_bytes: info.weight_bytes as i64, info: Some(info), hw, mode, requested_ctx: req, mmproj_bytes: mmproj, flags: &none })
+    }
+
+    #[test]
+    fn small_nvidia_runs_4gb_model_on_gpu() {
+        // Eskiden: "7,1 GiB gerekiyor, GPU'da 3,2 GiB kullanılabilir (masaüstü için 2,1 GiB pay)". Gerçekte (llama.cpp
+        // ölçümü) 32K bağlam ve 512 toplu işlemle ~4,6 GiB yetiyor.
+        for id in ["CUDA0", "Vulkan1"] {
+            let hw = rog_strix(id);
+            for mode in [ComputeMode::Gpu, ComputeMode::Auto] {
+                let r = pm(&gemma4_iq2(), &hw, mode, 0, GEMMA4_MMPROJ);
+                assert!(r.can_start(), "{id} {mode:?}: {r:?}");
+                assert_eq!(r.placement, "gpu", "{r:?}");
+                assert_eq!(r.ctx, 32768, "{r:?}");
+                assert_eq!(r.ubatch, 512, "{r:?}");
+                assert!(!r.mmproj_offload, "görsel kodlayıcı işlemcide olmalı: {r:?}");
+                assert!(contains_seq(&r.args, &["-ngl", "all"]) && contains_seq(&r.args, &["--fit", "off"]), "{r:?}");
+                assert!(r.summary.contains("işlemcide"), "{r:?}");
+            }
+        }
+        // Görsel adaptör yoksa aynı bellekle daha büyük toplu işlem seçilebilir.
+        let r = pm(&gemma4_iq2(), &rog_strix("CUDA0"), ComputeMode::Gpu, 0, 0);
+        assert!(r.can_start() && r.ctx >= 32768, "{r:?}");
+    }
+
+    #[test]
+    fn gpu_mode_shrinks_chosen_context() {
+        // Kullanıcı 128K seçmiş: GPU modunda engellemek yerine sığan en büyük bağlamla tamamen GPU'da çalışır.
+        let r = pm(&gemma4_iq2(), &rog_strix("CUDA0"), ComputeMode::Gpu, 131072, GEMMA4_MMPROJ);
+        assert!(r.can_start(), "{r:?}");
+        assert_eq!(r.placement, "gpu");
+        assert!(r.ctx < 131072 && r.ctx >= MIN_AGENT_CTX, "{r:?}");
+        assert!(r.warnings.join("").contains("sığmıyor"), "{r:?}");
+        // Otomatik modda seçilen bağlam korunur, model GPU ile RAM arasında paylaştırılır.
+        let a = pm(&gemma4_iq2(), &rog_strix("CUDA0"), ComputeMode::Auto, 131072, GEMMA4_MMPROJ);
+        assert!(a.can_start(), "{a:?}");
+        assert_eq!(a.placement, "mixed");
+        assert_eq!(a.ctx, 131072);
+    }
+
+    #[test]
+    fn gpu_mode_block_explains_breakdown() {
+        // 6 GB karta 12 GB'lık model hiçbir ayarla sığmaz: neden ayrıntılı söylenir.
+        let big = GgufInfo { weight_bytes: 12 * G, ..gemma4_iq2() };
+        let r = pm(&big, &rog_strix("CUDA0"), ComputeMode::Gpu, 0, 0);
+        assert!(!r.can_start());
+        let b = r.blocker.unwrap();
+        assert!(b.contains("sığmıyor") && b.contains("bağlam önbelleği") && b.contains("güvenlik payı"), "{b}");
+    }
+
+    #[test]
+    fn discrete_reserve_is_small() {
+        // Ayrık 6 GB kartta pay 512 MiB (eskiden APU sanılınca 2,1 GiB, ayrık sayılınca 1 GiB).
+        let r = pm(&gemma4_iq2(), &rog_strix("CUDA0"), ComputeMode::Auto, 0, 0);
+        assert!(r.summary.contains("0,5 GiB güvenlik payı"), "{r:?}");
+    }
+
+    #[test]
+    fn big_gpu_keeps_fast_batches() {
+        // Bellek bolsa davranış değişmez: 2048 toplu işlem, görsel adaptör GPU'da, 128K bağlam.
+        let hw = HardwareInfo {
+            gpus: vec![GpuDevice { id: "CUDA0".into(), name: "NVIDIA GeForce RTX 4090".into(), total_bytes: 24 * G, free_bytes: 23 * G }],
+            ram_total_bytes: 64 * G,
+            ram_available_bytes: 50 * G,
+            ..rog_strix("CUDA0")
+        };
+        let r = pm(&gemma4_iq2(), &hw, ComputeMode::Auto, 0, GEMMA4_MMPROJ);
+        assert_eq!((r.placement.as_str(), r.ctx, r.ubatch, r.mmproj_offload), ("gpu", 131072, 2048, true), "{r:?}");
+    }
+
+    #[test]
+    fn estimates_cover_measured_server_memory() {
+        // llama.cpp b12383 Vulkan, Gemma 4 12B: gerçek sunucu ölçümleri (KV + döndürme tamponu, hesap tamponu; MiB).
+        let i = gemma4_iq2();
+        for (ctx, ub, kv_real, compute_real) in
+            [(16384u64, 256u64, 367.2, 68.6), (16384, 512, 409.7, 137.5), (65536, 1024, 902.7, 372.1), (16384, 2048, 664.7, 556.1), (131072, 2048, 1616.7, 1004.1)]
+        {
+            let kv = i.kv_bytes(ctx, ub) as f64 / MIB as f64;
+            let c = i.compute_bytes(ctx, ub).unwrap() as f64 / MIB as f64;
+            assert!(kv >= kv_real && kv <= kv_real * 1.15, "kv {ctx}/{ub}: {kv:.0} ↔ {kv_real}");
+            assert!(c >= compute_real && c <= compute_real + 160.0, "hesap {ctx}/{ub}: {c:.0} ↔ {compute_real}");
+        }
     }
 
     #[test]

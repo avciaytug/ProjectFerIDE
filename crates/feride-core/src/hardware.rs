@@ -89,9 +89,38 @@ static DEV_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*([A-Za-z]+\d+):\s*(.+?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)").unwrap()
 });
 
-static UNIFIED_GPU: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)Radeon\(TM\) \d+M|Radeon \d{3,4}[MS]\b|8060S|8050S|890M|880M|780M|760M|740M|Vega \d+ Graphics|Intel\(R\) (Arc\(TM\) |Iris|UHD)|Intel.*Graphics|Apple").unwrap()
-});
+/// Sistem belleğini paylaşan (tümleşik) GPU mu? Apple, Intel'in tümleşik GPU'ları (UHD, Iris, Meteor/Lunar Lake
+/// Arc), AMD APU'lar (Radeon 8060S/890M/780M, "Radeon(TM) Graphics") ve NVIDIA'nın birleşik bellekli yongaları
+/// (GB10, Jetson). Ayrık kartlar (GeForce, Radeon RX / Pro W, Arc A/B serisi…) değildir. Karar yalnızca modelin
+/// çalışacağı GPU için verilir: dizüstünde Intel UHD + NVIDIA varsa NVIDIA ayrık kart olarak kalır.
+pub fn is_integrated_gpu(name: &str) -> bool {
+    static AMD_DISCRETE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\brx\s*\d|\brx\s*vega|pro\s*w\d|ai\s*pro|instinct|radeon\s*vii|firepro|\br[579]\s*\d{3}\b|\bhd\s*\d{4}\b|vega\s*(56|64)\b|frontier")
+            .unwrap()
+    });
+    static INTEL_DISCRETE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"arc(\(tm\))?\s*(pro\s*)?[ab]\d{2,3}\b|arc(\(tm\))?\s*pro|data\s*center\s*gpu").unwrap());
+    let n = name.to_lowercase();
+    if n.contains("apple") {
+        return true;
+    }
+    if n.contains("nvidia") || n.contains("geforce") || n.contains("quadro") || n.contains("tesla") {
+        return ["gb10", "tegra", "orin", "thor"].iter().any(|x| n.contains(x));
+    }
+    if n.contains("intel") {
+        return !INTEL_DISCRETE.is_match(&n);
+    }
+    if n.contains("radeon") || n.contains("amd") {
+        return !AMD_DISCRETE.is_match(&n);
+    }
+    false
+}
+
+/// Modelin çalışacağı GPU önce gelecek biçimde sıralar: ayrık kartlar tümleşik olanlardan önce, sonra belleği büyük
+/// olan. (Vulkan dizüstünde Intel UHD'yi NVIDIA'dan önce listeleyebilir.)
+pub fn sort_gpus(gpus: &mut [GpuDevice]) {
+    gpus.sort_by_key(|g| (is_integrated_gpu(&g.name), std::cmp::Reverse(g.total_bytes)));
+}
 
 /// `llama-server --list-devices` çıktısını ayrıştırır.
 pub fn parse_list_devices(out: &str) -> Vec<GpuDevice> {
@@ -193,14 +222,21 @@ pub async fn llama_flags(paths: &Paths, server: &Path) -> BTreeSet<String> {
 /// yanlışlıkla "GPU yok" deyip modeli işlemcide (10 kat yavaş) başlatmamak için birkaç kez denenir.
 pub async fn list_gpus(paths: &Paths, server: &Path) -> Vec<GpuDevice> {
     const ATTEMPTS: u32 = 3;
+    crate::winsec::restore_llama_backends(server);
     for attempt in 1..=ATTEMPTS {
-        let mut cmd = crate::proc::command(paths, &server.to_string_lossy(), &["--list-devices".to_string()]);
+        // `-v`: hangi işlemci arka ucunun yüklendiğini ("loaded CPU backend from …") yeni sürümler yalnızca ayrıntılı
+        // günlükte yazıyor.
+        let mut cmd = crate::proc::command(paths, &server.to_string_lossy(), &["-v".to_string(), "--list-devices".to_string()]);
         let (code, all, timed_out) = match crate::proc::run_capture(&mut cmd, std::time::Duration::from_secs(30)).await {
             Ok((code, out, err, timed_out)) => (code, format!("{out}\n{err}"), timed_out),
             Err(e) => (None, format!("başlatılamadı: {e}"), false),
         };
         if code.is_some_and(|c| c != 0) && crate::winsec::note_engine_result(code, &all) {
             return vec![];
+        }
+        // Windows Akıllı Uygulama Denetimi'nin her açılışta bildirim göstermemesi için kullanılmayan arka uçları kaldır.
+        if code == Some(0) {
+            crate::winsec::prune_llama_backends(server, &all);
         }
         let mut gpus = parse_list_devices(&all);
         gpus.retain(|g| !g.name.to_lowercase().contains("llvmpipe"));
@@ -232,13 +268,17 @@ pub async fn list_gpus(paths: &Paths, server: &Path) -> Vec<GpuDevice> {
 
 pub async fn probe(paths: &Paths, server: Option<&Path>) -> HardwareInfo {
     let (total, avail, cores, cpu_name) = tokio::task::spawn_blocking(ram_and_cpu).await.unwrap_or((16 << 30, 8 << 30, 4, String::new()));
-    let gpus = match server.filter(|_| !crate::winsec::engine_blocked()) {
+    let mut gpus = match server.filter(|_| !crate::winsec::engine_blocked()) {
         Some(server) => list_gpus(paths, server).await,
         None => vec![],
     };
+    sort_gpus(&mut gpus);
 
-    let linux_apu = linux_amd_apu_limits(total);
-    let unified = cfg!(target_os = "macos") || linux_apu.is_some() || gpus.iter().any(|g| UNIFIED_GPU.is_match(&g.name));
+    // Paylaşımlı bellek kararı yalnızca modelin çalışacağı GPU'ya göre verilir. (Eskiden listedeki herhangi bir
+    // tümleşik GPU — ör. NVIDIA'lı dizüstündeki Intel UHD — 6 GB'lık ayrık karta da APU kuralını, %35 masaüstü
+    // payını uyguluyordu.)
+    let unified = cfg!(target_os = "macos") || gpus.first().is_some_and(|g| is_integrated_gpu(&g.name));
+    let linux_apu = linux_amd_apu_limits(total).filter(|_| unified);
     let dedicated = match gpus.first().filter(|_| unified) {
         Some(g) => {
             let name = g.name.clone();
@@ -520,8 +560,57 @@ mod tests {
         assert_eq!(d[0].total_bytes, 64481 << 20);
         assert_eq!(d[0].free_bytes, 5543 << 20);
         assert_eq!(d[1].name, "NVIDIA GeForce RTX 4090");
-        assert!(UNIFIED_GPU.is_match(&d[0].name));
-        assert!(!UNIFIED_GPU.is_match(&d[1].name));
+        assert!(is_integrated_gpu(&d[0].name));
+        assert!(!is_integrated_gpu(&d[1].name));
+    }
+
+    #[test]
+    fn integrated_or_discrete() {
+        for n in [
+            "AMD Radeon(TM) 8060S Graphics",
+            "AMD Radeon 8060S Graphics (RADV STRIX_HALO)",
+            "AMD Radeon Graphics (RADV GFX1151)",
+            "AMD Radeon(TM) Graphics",
+            "AMD Radeon 890M Graphics",
+            "AMD Radeon(TM) 780M",
+            "AMD Radeon(TM) Vega 8 Graphics",
+            "Intel(R) UHD Graphics 630",
+            "Intel(R) Iris(R) Xe Graphics",
+            "Intel(R) Arc(TM) Graphics",
+            "Intel(R) Arc(TM) 140V GPU (16GB)",
+            "Apple M4 Max",
+            "NVIDIA GB10",
+        ] {
+            assert!(is_integrated_gpu(n), "tümleşik olmalı: {n}");
+        }
+        for n in [
+            "NVIDIA GeForce GTX 1660 Ti",
+            "NVIDIA GeForce RTX 2060",
+            "NVIDIA GeForce RTX 4050 Laptop GPU",
+            "NVIDIA RTX A2000 Laptop GPU",
+            "AMD Radeon RX 7900 XTX",
+            "AMD Radeon RX 9070 XT (RADV GFX1201)",
+            "AMD Radeon Pro W7900",
+            "AMD Radeon AI PRO R9700",
+            "AMD Radeon RX Vega 64",
+            "AMD Radeon R9 390",
+            "Intel(R) Arc(TM) A770 Graphics",
+            "Intel(R) Arc(TM) B580 Graphics",
+            "Intel(R) Arc(TM) Pro B60 Graphics",
+        ] {
+            assert!(!is_integrated_gpu(n), "ayrık olmalı: {n}");
+        }
+    }
+
+    #[test]
+    fn discrete_gpu_first() {
+        // NVIDIA'lı dizüstünde Vulkan, Intel UHD'yi de listeler; model NVIDIA'da çalışmalı.
+        let mut g = parse_list_devices(
+            "Available devices:\n  Vulkan0: Intel(R) UHD Graphics 630 (8064 MiB, 7000 MiB free)\n  Vulkan1: NVIDIA GeForce RTX 2060 (6144 MiB, 5427 MiB free)\n",
+        );
+        sort_gpus(&mut g);
+        assert_eq!(g[0].id, "Vulkan1");
+        assert!(!is_integrated_gpu(&g[0].name));
     }
 
     #[test]

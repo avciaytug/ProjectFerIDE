@@ -37,7 +37,9 @@ async function load() {
     const r = await S.rpc.call('setup.status');
     deps = r.deps;
     state = r.state;
-    sac = r.smart_app_control === 1 ? r.sac_help : null;
+    // Akıllı Uygulama Denetimi'nin açık olması tek başına sorun değil (çoğu bileşen itibarıyla çalışır); uyarı yalnızca
+    // Windows bir bileşeni gerçekten engellediğinde gösterilir.
+    sac = r.smart_app_control === 1 && r.sac_blocked ? r.sac_help : null;
     if (!selected.size) for (const d of deps) if (!d.installed && (d.required || ['git', 'uv', 'node', 'pydocs', 'longpaths'].includes(d.id))) selected.add(d.id);
   } catch (e) { toast(e.message, 'err'); }
   render();
@@ -46,12 +48,12 @@ async function load() {
 
 let sac = null;
 
-/** Windows Akıllı Uygulama Denetimi açıkken gösterilen uyarı (imzasız llama.cpp engellenir). */
+/** Windows Akıllı Uygulama Denetimi imzasız bir bileşeni engellediğinde gösterilen uyarı. */
 export function sacWarning(text) {
   return h('div', { class: 'sac-warn' },
     h('div', { class: 'row', style: { alignItems: 'flex-start' } }, icon('shield'),
       h('div', { class: 'grow' },
-        h('b', {}, 'Windows Akıllı Uygulama Denetimi açık'),
+        h('b', {}, 'Windows Akıllı Uygulama Denetimi bir bileşeni engelledi'),
         h('div', { class: 'small', style: { marginTop: '4px' } }, text),
         h('div', { class: 'row', style: { marginTop: '8px' } },
           h('button', { class: 'btn primary sm', onclick: () => S.rpc.call('app.open_security').catch((e) => toast(e.message, 'err')) }, icon('external'), 'Windows Güvenlik\'i aç'),

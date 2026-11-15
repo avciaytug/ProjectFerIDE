@@ -125,6 +125,11 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
   henüz imzalı değil. **Windows Güvenlik → Uygulama ve tarayıcı denetimi → Akıllı Uygulama Denetimi ayarları →
   Kapalı** yapın ve FerIDE'yi yeniden başlatın. FerIDE bu durumu kendisi de algılayıp açıklar. Windows'un Nisan 2026
   ve sonraki güncellemelerinde bu ayar sonradan yeniden açılabilir.
+- **"Bu uygulamanın bir kısmı engellendi … ggml-cpu-….dll" bildirimleri:** llama.cpp her açılışta bütün işlemci
+  çeşitlerini (`ggml-cpu-*.dll`) deneyip en uygununu seçer; Akıllı Uygulama Denetimi bunlardan bazılarını engelleyip
+  bildirim gösterir. FerIDE (beta.18'den itibaren) ilk donanım ölçümünde bu bilgisayarda kullanılan çeşidi bulur,
+  gerisini llama.cpp klasöründeki `kullanilmayan` alt klasörüne taşır; bildirimler kesilir. Motor çalıştığı sürece
+  FerIDE ayrıca uyarı göstermez.
 - **Windows'ta Linux komutunu (`curl … | bash`) çalıştırdıysanız:** betik Windows'u algılayıp Windows kurulumuna
   geçer; yine de Windows'ta PowerShell komutunu kullanın.
 - **Tanı:** `feride doctor` bağımlılıkları, donanımı, modelleri ve Akıllı Uygulama Denetimi durumunu gösterir.
