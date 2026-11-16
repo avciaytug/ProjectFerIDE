@@ -26,6 +26,8 @@ pub mod terminal;
 pub mod update;
 pub mod util;
 pub mod voice;
+#[cfg(windows)]
+pub mod winint;
 pub mod winsec;
 
 pub use crate::core::Core;

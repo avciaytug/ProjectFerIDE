@@ -32,7 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 rust-embed = "8"
 mime_guess = "2"
-open = "5"
+open = { version = "5", features = ["shellexecute-on-windows"] }
 base64 = "0.22"
 tao = { version = "0.34", optional = true }
 wry = { version = "0.53", optional = true }

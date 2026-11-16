@@ -14,6 +14,73 @@ pub struct Entry {
 
 const HEAVY_DIRS: [&str; 8] = ["node_modules", "target", ".git", "build", ".dart_tool", "__pycache__", ".venv", "dist"];
 
+/// Windows'ta dosya adı olarak kullanılamayan aygıt adları: `con`, `prn`, `aux`, `nul`, `com0`–`com9`, `lpt0`–`lpt9`
+/// (uzantılı hâlleri de: `nul.txt`).
+pub fn is_reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end_matches(' ').to_ascii_lowercase();
+    let b = stem.as_bytes();
+    matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || (b.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && b[3].is_ascii_digit())
+}
+
+/// Windows'ta dosya işlemleri için "ham" (`\\?\` önekli) yol. Normal yollarda Windows `nul`, `con` gibi adları aygıt
+/// olarak yorumlar: Git Bash'te `komut 2>nul` yazınca oluşan `nul` dosyası bu yüzden açılamaz, taşınamaz, silinemez.
+/// Ham yol bu yorumu (ve 260 karakter sınırını) kapatır. Göreli ya da zaten önekli yollara ve diğer sistemlere dokunmaz.
+pub fn os_path(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::ffi::OsString;
+        use std::path::{Component, Prefix};
+        let mut comps = p.components();
+        let mut out = match comps.next() {
+            Some(Component::Prefix(pre)) => match pre.kind() {
+                Prefix::Disk(d) => OsString::from(format!(r"\\?\{}:", (d as char).to_ascii_uppercase())),
+                Prefix::UNC(server, share) => {
+                    let mut s = OsString::from(r"\\?\UNC\");
+                    s.push(server);
+                    s.push(r"\");
+                    s.push(share);
+                    s
+                }
+                _ => return p.to_path_buf(),
+            },
+            _ => return p.to_path_buf(),
+        };
+        // Ham yolda "." ve ".." çözülmez; burada çözülür.
+        let mut parts: Vec<&std::ffi::OsStr> = vec![];
+        for c in comps {
+            match c {
+                Component::Normal(n) => parts.push(n),
+                Component::ParentDir => {
+                    parts.pop();
+                }
+                _ => {}
+            }
+        }
+        if parts.is_empty() {
+            out.push(r"\");
+        }
+        for part in parts {
+            out.push(r"\");
+            out.push(part);
+        }
+        PathBuf::from(out)
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_path_buf()
+    }
+}
+
+/// Windows'ta aygıt adıyla yeni dosya oluşturulmasını engeller (Windows onu dosya olarak açamaz).
+fn check_new_name(path: &Path) -> anyhow::Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if cfg!(windows) && is_reserved_name(&name) {
+        anyhow::bail!("\"{name}\" Windows'ta aygıt adıdır (nul, con, prn, aux, com1, lpt1…); dosya adı olarak kullanılamaz.");
+    }
+    Ok(())
+}
+
 pub fn list_dir(path: &Path) -> anyhow::Result<Vec<Entry>> {
     let mut v: Vec<Entry> = std::fs::read_dir(path)?
         .flatten()
@@ -43,12 +110,12 @@ pub struct FileContent {
 }
 
 pub fn read_text(path: &Path) -> anyhow::Result<FileContent> {
-    let md = std::fs::metadata(path)?;
+    let md = std::fs::metadata(os_path(path))?;
     let size = md.len();
     if size > 8 * 1024 * 1024 {
         return Ok(FileContent { path: path.into(), text: None, binary: false, size, too_large: true });
     }
-    let bytes = std::fs::read(path)?;
+    let bytes = std::fs::read(os_path(path))?;
     if crate::util::looks_binary(&bytes) {
         return Ok(FileContent { path: path.into(), text: None, binary: true, size, too_large: false });
     }
@@ -57,10 +124,11 @@ pub fn read_text(path: &Path) -> anyhow::Result<FileContent> {
 }
 
 pub fn write_text(path: &Path, text: &str) -> anyhow::Result<()> {
-    crate::util::write_atomic(path, text.as_bytes())
+    crate::util::write_atomic(&os_path(path), text.as_bytes())
 }
 
 pub fn create(path: &Path, dir: bool) -> anyhow::Result<()> {
+    check_new_name(path)?;
     if path.exists() {
         anyhow::bail!("zaten var: {}", path.display());
     }
@@ -76,10 +144,11 @@ pub fn create(path: &Path, dir: bool) -> anyhow::Result<()> {
 }
 
 pub fn rename(from: &Path, to: &Path) -> anyhow::Result<()> {
-    if to.exists() {
+    check_new_name(to)?;
+    if os_path(to).exists() {
         anyhow::bail!("hedef zaten var: {}", to.display());
     }
-    std::fs::rename(from, to)?;
+    std::fs::rename(os_path(from), os_path(to))?;
     Ok(())
 }
 
@@ -89,14 +158,19 @@ pub fn trash(path: &Path, trash_dir: &Path) -> anyhow::Result<PathBuf> {
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dosya".into());
     let dest = trash_dir.join(format!("{stamp}-{name}"));
     std::fs::create_dir_all(trash_dir)?;
-    if std::fs::rename(path, &dest).is_err() {
+    // Ham yol: "nul" gibi aygıt adlı dosyalar da taşınabilsin.
+    let (src, dst) = (os_path(path), os_path(&dest));
+    if !src.exists() {
+        anyhow::bail!("bulunamadı: {}", path.display());
+    }
+    if std::fs::rename(&src, &dst).is_err() {
         // Farklı diskteyse kopyala + sil.
-        if path.is_dir() {
-            copy_dir(path, &dest)?;
-            std::fs::remove_dir_all(path)?;
+        if src.is_dir() {
+            copy_dir(&src, &dst)?;
+            std::fs::remove_dir_all(&src)?;
         } else {
-            std::fs::copy(path, &dest)?;
-            std::fs::remove_file(path)?;
+            std::fs::copy(&src, &dst)?;
+            std::fs::remove_file(&src)?;
         }
     }
     Ok(dest)
@@ -210,6 +284,51 @@ pub fn sanitize_ui_path(p: &str) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserved_names() {
+        for n in ["nul", "NUL", "Nul.txt", "con", "prn", "aux", "COM1", "lpt9", "com0", "nul "] {
+            assert!(is_reserved_name(n), "{n}");
+        }
+        for n in ["null", "nul2", "com10", "console", "auxiliary", "annul", "nul_test.txt", "lptx"] {
+            assert!(!is_reserved_name(n), "{n}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn os_path_forms() {
+        assert_eq!(os_path(Path::new(r"C:\a\b\..\nul")), PathBuf::from(r"\\?\C:\a\nul"));
+        assert_eq!(os_path(Path::new("c:/x/./y")), PathBuf::from(r"\\?\C:\x\y"));
+        assert_eq!(os_path(Path::new(r"\\srv\share\d\nul")), PathBuf::from(r"\\?\UNC\srv\share\d\nul"));
+        assert_eq!(os_path(Path::new(r"\\?\C:\zaten")), PathBuf::from(r"\\?\C:\zaten"));
+        assert_eq!(os_path(Path::new("göreli/yol")), PathBuf::from("göreli/yol"));
+        assert_eq!(os_path(Path::new(r"C:\")), PathBuf::from(r"\\?\C:\"));
+    }
+
+    /// Git Bash'in "2>nul" ile bıraktığı dosya: gezginde açılabilmeli, çöp kutusuna taşınabilmeli.
+    #[cfg(windows)]
+    #[test]
+    fn nul_file_can_be_read_and_trashed() {
+        let dir = std::env::temp_dir().join(format!("feride-nul-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let nul = dir.join("nul");
+        std::fs::write(os_path(&nul), b"/usr/bin/bash: line 1: wmic: command not found\n").unwrap();
+        // Gezginde görünür (listede "nul" adlı dosya).
+        assert!(list_dir(&dir).unwrap().iter().any(|e| e.name == "nul" && !e.is_dir));
+        // Normal yolla okunamazdı (Windows aygıtı açardı); ham yolla içeriği gelir.
+        assert!(read_text(&nul).unwrap().text.unwrap().contains("wmic"));
+        // Silme (FerIDE çöp kutusuna taşıma) çalışır ve dosya gerçekten gider.
+        let trash_dir = dir.join("cop");
+        let moved = trash(&nul, &trash_dir).unwrap();
+        assert!(!os_path(&nul).exists());
+        assert!(std::fs::read_to_string(&moved).unwrap().contains("wmic"));
+        // Bu adla yeni dosya oluşturulamaz ve yeniden adlandırılamaz.
+        assert!(create(&dir.join("nul"), false).unwrap_err().to_string().contains("aygıt adı"));
+        assert!(rename(&moved, &dir.join("con.txt")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn search_and_trash() {

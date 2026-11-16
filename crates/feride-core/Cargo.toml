@@ -33,7 +33,7 @@ html2text = "0.13"
 dunce = "1"
 base64 = "0.22"
 rust-embed = "8"
-open = "5"
+open = { version = "5", features = ["shellexecute-on-windows"] }
 url = "2"
 
 [target.'cfg(windows)'.dependencies]
@@ -48,6 +48,16 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Registry",
   "Win32_System_SystemInformation",
   "Win32_System_Diagnostics_Debug",
+  "Win32_System_Environment",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+# Kısayollar için COM (IShellLink); WebView zaten aynı sürümü kullanıyor.
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_Storage_FileSystem",
+  "Win32_UI_Shell",
 ] }
 
 [target.'cfg(unix)'.dependencies]

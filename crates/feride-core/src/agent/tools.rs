@@ -2,6 +2,7 @@
 
 use regex::Regex;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -663,7 +664,13 @@ async fn run_command(ctx: &ToolCtx, a: &Value) -> ToolResult {
     if !cwd.is_dir() {
         return ToolResult::err(format!("çalışma klasörü yok: {}", cwd.display()));
     }
-    let (prog, args) = ctx.shell.command_args(command);
+    // Windows'ta Git Bash: "2>nul" çıktıyı atmaz, silinemeyen bir "nul" dosyası oluşturur.
+    let command: Cow<str> = if cfg!(windows) && ctx.shell.kind == crate::shell::ShellKind::Bash {
+        crate::shell::fix_nul_redirects(command)
+    } else {
+        Cow::Borrowed(command)
+    };
+    let (prog, args) = ctx.shell.command_args(&command);
     let mut cmd = crate::proc::command(&ctx.core.paths, &prog, &args);
     cmd.current_dir(&cwd).env("FERIDE_AGENT", "1").env("GIT_TERMINAL_PROMPT", "0").env("PYTHONIOENCODING", "utf-8");
     if cfg!(windows) {

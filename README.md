@@ -132,6 +132,11 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
 - **Kurulum "Uygulama Denetimi ilkesi bu dosyayı engelledi" diyorsa:** Akıllı Uygulama Denetimi, imzasız ve henüz
   tanımadığı yeni FerIDE sürümünü çalıştırmıyor. Kurulum betiği bunu algılayıp açıklar ve Windows Güvenlik'in ilgili
   sayfasını açar: **Akıllı Uygulama Denetimi ayarları → Kapalı** yapıp kurulum komutunu yeniden çalıştırın.
+- **Microsoft Defender FerIDE'yi "Trojan:Win32/…!ml" diye karantinaya aldıysa:** sonu `!ml` ile biten adlar,
+  imzasız yeni programlarda görülebilen makine öğrenmesi tahminleridir. Bilinen bir virüs imzası değildir. Windows
+  Güvenlik → Virüs ve tehdit koruması → Koruma geçmişi → ilgili kayıt → Eylemler → Geri yükle. Dosyayı Microsoft'a
+  yanlış alarm olarak da bildirebilirsiniz: https://www.microsoft.com/en-us/wdsi/filesubmission. Modelleriniz ve
+  sohbetleriniz veri klasöründe durur, silinmez.
 - **"Bu uygulamanın bir kısmı engellendi … ggml-cpu-….dll" bildirimleri:** llama.cpp her açılışta bütün işlemci
   çeşitlerini (`ggml-cpu-*.dll`) deneyip en uygununu seçer; Akıllı Uygulama Denetimi bunlardan bazılarını engelleyip
   bildirim gösterir. FerIDE (beta.18'den itibaren) ilk donanım ölçümünde bu bilgisayarda kullanılan çeşidi bulur,

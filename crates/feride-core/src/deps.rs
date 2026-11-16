@@ -752,14 +752,8 @@ impl Deps {
         }
         #[cfg(windows)]
         if names.is_empty() {
-            let mut cmd = crate::proc::command(
-                &self.paths,
-                "powershell.exe",
-                &["-NoProfile".into(), "-Command".into(), "(Get-CimInstance Win32_VideoController).Name".into()],
-            );
-            if let Ok((_, out, _, _)) = crate::proc::run_capture(&mut cmd, Duration::from_secs(30)).await {
-                names.extend(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
-            }
+            // Ekran kartı sürücülerinin kayıt defterindeki adları (PowerShell çalıştırılmaz).
+            names.extend(crate::hardware::windows_gpu_names());
         }
         names
             .iter()
@@ -1094,63 +1088,63 @@ impl Deps {
         Ok("WebView2 kuruldu.".into())
     }
 
-    // ------------------------------------------------------------------ yönetici betiği
-    /// Yönetici gerektiren işleri tek betikte toplar ve tek onayla çalıştırır.
+    // ------------------------------------------------------------------ yönetici adımı
+    /// Yönetici gerektiren işleri toplar ve tek onayla yapar.
     pub async fn run_admin_batch(&self, ids: &[String]) -> anyhow::Result<String> {
         let ids: Vec<String> = ids.iter().filter(|i| !self.state().admin_done.contains(i)).cloned().collect();
         if ids.is_empty() {
             return Ok("Yönetici gerektiren iş yok.".into());
         }
-        if cfg!(windows) {
-            let mut script = String::from("$ErrorActionPreference='Continue'\n$log=@()\n");
-            if ids.iter().any(|i| i == "vcredist") {
-                let f = self.paths.cache().join("vc_redist.x64.exe");
-                let url = if std::env::consts::ARCH == "aarch64" {
-                    "https://aka.ms/vs/17/release/vc_redist.arm64.exe"
-                } else {
-                    "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-                };
-                self.download("admin", url, &f, "Visual C++ çalışma zamanı").await?;
-                script.push_str(&format!(
-                    "$p = Start-Process -FilePath '{}' -ArgumentList '/install','/quiet','/norestart' -Wait -PassThru\n$log += \"vcredist=$($p.ExitCode)\"\n",
-                    ps_quote(&f.to_string_lossy())
-                ));
-            }
-            if ids.iter().any(|i| i == "longpaths") {
-                script.push_str("New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' -Name 'LongPathsEnabled' -Value 1 -PropertyType DWORD -Force | Out-Null\n$log += 'longpaths=0'\n");
-            }
-            let result = self.paths.run().join("admin-result.txt");
-            let _ = std::fs::remove_file(&result);
-            script.push_str(&format!("$log -join \"`n\" | Out-File -Encoding utf8 '{}'\n", ps_quote(&result.to_string_lossy())));
-            let script_file = self.paths.run().join("feride-admin.ps1");
-            std::fs::write(&script_file, script.as_bytes())?;
-            self.progress("admin", "Yönetici onayı bekleniyor (tek seferlik)", 0, 0);
-            let launcher = format!(
-                "try {{ $p = Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"'; exit $p.ExitCode }} catch {{ exit 1223 }}",
-                ps_quote(&script_file.to_string_lossy())
-            );
-            let mut c = crate::proc::command(
-                &self.paths,
-                "powershell.exe",
-                &["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), launcher],
-            );
-            let (code, _, _, _) = crate::proc::run_capture(&mut c, Duration::from_secs(1800)).await?;
-            let _ = std::fs::remove_file(&script_file);
-            if code == Some(1223) {
-                self.update_state(|s| s.admin_declined_at = Some(crate::util::now_iso()));
-                anyhow::bail!("Yönetici izni verilmedi. İsterseniz Ayarlar > Kurulum'dan daha sonra tekrar deneyebilirsiniz.");
-            }
-            let out = std::fs::read_to_string(&result).unwrap_or_default();
-            let _ = std::fs::remove_file(&result);
-            self.update_state(|s| {
-                for i in &ids {
-                    if !s.admin_done.contains(i) {
-                        s.admin_done.push(i.clone());
-                    }
+        self.run_admin_platform(&ids).await
+    }
+
+    /// Windows: FerIDE kendisini yönetici olarak (tek UAC onayıyla) `admin-setup` komutuyla açar; o süreç Visual C++
+    /// çalışma zamanını kurar ve uzun yolları açar. Eskiden gizli pencerede yönetici PowerShell betiği
+    /// (`-ExecutionPolicy Bypass`) çalıştırılıyordu; Defender'ın kötü amaçlı yazılım sandığı bir kalıp.
+    #[cfg(windows)]
+    async fn run_admin_platform(&self, ids: &[String]) -> anyhow::Result<String> {
+        let quote = |p: &Path| format!("\"{}\"", p.display());
+        let mut args: Vec<String> = vec!["admin-setup".into()];
+        if ids.iter().any(|i| i == "vcredist") {
+            let f = self.paths.cache().join("vc_redist.x64.exe");
+            let url = if std::env::consts::ARCH == "aarch64" {
+                "https://aka.ms/vs/17/release/vc_redist.arm64.exe"
+            } else {
+                "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+            };
+            self.download("admin", url, &f, "Visual C++ çalışma zamanı").await?;
+            args.extend(["--vcredist".into(), quote(&f)]);
+        }
+        if ids.iter().any(|i| i == "longpaths") {
+            args.push("--longpaths".into());
+        }
+        let result = self.paths.run().join("admin-result.txt");
+        let _ = std::fs::remove_file(&result);
+        args.extend(["--result".into(), quote(&result)]);
+        self.progress("admin", "Yönetici onayı bekleniyor (tek seferlik)", 0, 0);
+        let me = std::env::current_exe()?;
+        let params = args.join(" ");
+        let code = tokio::task::spawn_blocking(move || crate::winint::run_elevated(&me, &params)).await??;
+        if code.is_none() {
+            self.update_state(|s| s.admin_declined_at = Some(crate::util::now_iso()));
+            anyhow::bail!("Yönetici izni verilmedi. İsterseniz Ayarlar > Kurulum'dan daha sonra tekrar deneyebilirsiniz.");
+        }
+        let out = std::fs::read_to_string(&result).unwrap_or_default();
+        let _ = std::fs::remove_file(&result);
+        self.update_state(|s| {
+            for i in ids {
+                if !s.admin_done.contains(i) {
+                    s.admin_done.push(i.clone());
                 }
-            });
-            Ok(format!("Yönetici adımları tamamlandı. {}", out.trim().replace('\n', ", ")))
-        } else if cfg!(target_os = "linux") {
+            }
+        });
+        Ok(format!("Yönetici adımları tamamlandı. {}", out.trim().replace('\n', ", ")))
+    }
+
+    #[cfg(not(windows))]
+    async fn run_admin_platform(&self, ids: &[String]) -> anyhow::Result<String> {
+        let ids = ids.to_vec();
+        if cfg!(target_os = "linux") {
             let pm = linux_package_command(&ids).ok_or_else(|| anyhow::anyhow!("Paket yöneticisi bulunamadı (apt/dnf/pacman/zypper)."))?;
             self.progress("admin", "Yönetici parolası isteniyor (tek seferlik)", 0, 0);
             let mut c = crate::proc::command(&self.paths, "pkexec", &["sh".into(), "-c".into(), pm]);
@@ -1169,11 +1163,8 @@ impl Deps {
     }
 }
 
-fn ps_quote(s: &str) -> String {
-    s.replace('\'', "''")
-}
-
 #[allow(unused_variables)]
+#[cfg_attr(windows, allow(dead_code))]
 fn linux_package_command(ids: &[String]) -> Option<String> {
     let want_git = ids.iter().any(|i| i == "git");
     let want_vk = ids.iter().any(|i| i == "vulkan");

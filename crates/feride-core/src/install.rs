@@ -120,55 +120,11 @@ pub fn after_update() {
         return;
     }
     let _ = write_json(&pointer_file(), &info);
-    // Windows "Yüklü uygulamalar" kaydındaki sürüm. (Eskiden PowerShell betiğiyle yazılıyordu; masaüstü uygulamasından
-    // çağrılınca sessizce başarısız oluyor ve listede eski sürüm kalıyordu.)
+    // Windows "Yüklü uygulamalar" kaydındaki sürüm (doğrudan Windows API'siyle).
     #[cfg(windows)]
-    if let Err(e) = write_uninstall_entry(UNINSTALL_KEY, &info, &dir.join(exe_name())) {
+    if let Err(e) = crate::winint::write_uninstall_entry(crate::winint::UNINSTALL_KEY, &info, &dir.join(exe_name()), false) {
         tracing::warn!("Windows kaldırma kaydı güncellenemedi: {e}");
     }
-}
-
-/// Windows "Yüklü uygulamalar" kaydının yeri (HKCU, yönetici izni gerekmez).
-#[cfg(windows)]
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\FerIDE";
-
-/// Kaldırma kaydının değerlerini PowerShell çalıştırmadan, doğrudan Windows API'siyle yazar (anahtar yoksa oluşturulur;
-/// kurulum tarihi korunur).
-#[cfg(windows)]
-fn write_uninstall_entry(key: &str, info: &InstallInfo, exe: &Path) -> std::io::Result<()> {
-    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD, REG_SZ};
-    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
-    let key_w = wide(key);
-    let set = |name: &str, kind: u32, data: &[u8]| -> std::io::Result<()> {
-        let name_w = wide(name);
-        // SAFETY: anahtar/değer adları sıfırla biten UTF-16; veri arabelleği ve boyutu birlikte verilir.
-        let rc = unsafe {
-            RegSetKeyValueW(HKEY_CURRENT_USER, key_w.as_ptr(), name_w.as_ptr(), kind, data.as_ptr().cast(), data.len() as u32)
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::from_raw_os_error(rc as i32))
-        }
-    };
-    let text = |name: &str, value: &str| -> std::io::Result<()> {
-        let bytes: Vec<u8> = wide(value).iter().flat_map(|u| u.to_le_bytes()).collect();
-        set(name, REG_SZ, &bytes)
-    };
-    let dword = |name: &str, value: u32| set(name, REG_DWORD, &value.to_le_bytes());
-    let exe_s = exe.to_string_lossy();
-    text("DisplayName", "FerIDE")?;
-    text("DisplayVersion", &info.version)?;
-    text("Publisher", "ProjectFerIDE")?;
-    text("DisplayIcon", &format!("{exe_s},0"))?;
-    text("InstallLocation", &info.install_dir.to_string_lossy())?;
-    text("UninstallString", &format!("\"{exe_s}\" uninstall"))?;
-    text("QuietUninstallString", &format!("\"{exe_s}\" uninstall --yes"))?;
-    text("URLInfoAbout", "https://github.com/avciaytug/ProjectFerIDE")?;
-    dword("NoModify", 1)?;
-    dword("NoRepair", 1)?;
-    dword("EstimatedSize", (std::fs::metadata(exe).map(|m| m.len() / 1024).unwrap_or(0)).min(u32::MAX as u64) as u32)?;
-    Ok(())
 }
 
 /// Çalışan programın bulunduğu klasör (Windows'ta `\\?\` öneki olmadan).
@@ -471,6 +427,7 @@ pub struct InstallReport {
 /// PATH). Testlerde kapatılır.
 pub fn install(src_exe: &Path, opts: &InstallOptions, system: bool) -> anyhow::Result<InstallReport> {
     validate(opts)?;
+    cleanup_removed_exes();
     check_writable(&opts.install_dir)?;
     check_writable(&opts.data_dir)?;
     let target = opts.install_dir.join(exe_name());
@@ -531,129 +488,40 @@ pub fn adopt_legacy(info: &InstallInfo) {
 
 // ------------------------------------------------------------------ işletim sistemiyle bütünleşme
 
-/// Betiği `-EncodedCommand` ile çalıştıracak PowerShell komutu (yollar ortam değişkenleriyle geçer; tırnak sorunu olmaz).
-#[cfg(windows)]
-fn powershell_cmd(script: &str, env: &[(&str, String)]) -> std::process::Command {
-    use base64::Engine;
-    use std::os::windows::process::CommandExt;
-    let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
-    let mut cmd = std::process::Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded]);
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    cmd
-}
-
-#[cfg(windows)]
-fn powershell(script: &str, env: &[(&str, String)]) -> anyhow::Result<()> {
-    let out = powershell_cmd(script, env).output()?;
-    if !out.status.success() {
-        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(())
-}
-
-/// Kullanıcı PATH'i ham hâliyle okunur/yazılır: %DEĞİŞKEN% girdileri genişletilmez, değer türü (REG_EXPAND_SZ)
-/// korunur, boş girdiler dahil başka hiçbir girdiye dokunulmaz. Yazdıktan sonra açık uygulamalara duyurulur.
-#[cfg(windows)]
-const WIN_PATH_FNS: &str = r#"
-function Get-UserPath {
-  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
-  $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
-  $v = ''
-  if ($k) {
-    if ($k.GetValueNames() -contains 'Path') { $kind = $k.GetValueKind('Path'); $v = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') }
-    $k.Close()
-  }
-  @{ Value = $v; Kind = $kind }
-}
-function Set-UserPath([string]$value, $kind) {
-  $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
-  $k.SetValue('Path', $value, $kind); $k.Close()
-  [Environment]::SetEnvironmentVariable('FERIDE_PATH_REFRESH', '1', 'User')
-  [Environment]::SetEnvironmentVariable('FERIDE_PATH_REFRESH', $null, 'User')
-}
-function Test-OurDir([string]$entry) {
-  $entry -and ([Environment]::ExpandEnvironmentVariables($entry).TrimEnd('\') -ieq $env:FI_DIR.TrimEnd('\'))
-}
-"#;
-
-#[cfg(windows)]
-const WIN_INTEGRATE: &str = r#"
-$ErrorActionPreference = 'Stop'
-$exe = $env:FI_EXE; $dir = $env:FI_DIR
-$sh = New-Object -ComObject WScript.Shell
-function Lnk([string]$path) {
-  $l = $sh.CreateShortcut($path); $l.TargetPath = $exe; $l.WorkingDirectory = $dir
-  $l.IconLocation = "$exe,0"; $l.Description = $env:FI_DESC; $l.Save()
-}
-if ($env:FI_MENU -eq '1') { Lnk (Join-Path ([Environment]::GetFolderPath('Programs')) 'FerIDE.lnk') }
-if ($env:FI_DESKTOP -eq '1') { Lnk (Join-Path ([Environment]::GetFolderPath('Desktop')) 'FerIDE.lnk') }
-if ($env:FI_PATH -eq '1') {
-  $p = Get-UserPath
-  if (-not (($p.Value -split ';') | Where-Object { Test-OurDir $_ })) {
-    $new = if ($p.Value -and -not $p.Value.EndsWith(';')) { "$($p.Value);$dir" } else { "$($p.Value)$dir" }
-    Set-UserPath $new $p.Kind
-  }
-}
-if ($env:FI_REG -eq '1') {
-  $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FerIDE'
-  New-Item -Path $k -Force | Out-Null
-  $v = @{ DisplayName = 'FerIDE'; DisplayVersion = $env:FI_VER; Publisher = 'ProjectFerIDE'; DisplayIcon = "$exe,0";
-          InstallLocation = $dir; UninstallString = "`"$exe`" uninstall"; QuietUninstallString = "`"$exe`" uninstall --yes";
-          URLInfoAbout = 'https://github.com/avciaytug/ProjectFerIDE'; InstallDate = (Get-Date -Format 'yyyyMMdd') }
-  foreach ($n in $v.Keys) { Set-ItemProperty -Path $k -Name $n -Value $v[$n] }
-  foreach ($n in @('NoModify', 'NoRepair')) { New-ItemProperty -Path $k -Name $n -Value 1 -PropertyType DWord -Force | Out-Null }
-  New-ItemProperty -Path $k -Name 'EstimatedSize' -Value ([int]$env:FI_SIZE_KB) -PropertyType DWord -Force | Out-Null
-}
-"#;
-
-#[cfg(windows)]
-const WIN_REMOVE: &str = r#"
-$exe = $env:FI_EXE; $dir = $env:FI_DIR
-$sh = New-Object -ComObject WScript.Shell
-foreach ($p in @((Join-Path ([Environment]::GetFolderPath('Programs')) 'FerIDE.lnk'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'FerIDE.lnk'))) {
-  if (Test-Path $p) { $t = $sh.CreateShortcut($p).TargetPath; if ($t -and ($t -ieq $exe)) { Remove-Item $p -Force } }
-}
-$p = Get-UserPath
-if ($p.Value) {
-  $parts = @($p.Value -split ';')
-  $keep = @($parts | Where-Object { -not (Test-OurDir $_) })
-  if ($keep.Count -ne $parts.Count) { Set-UserPath ($keep -join ';') $p.Kind }
-}
-$k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FerIDE'
-if (Test-Path $k) {
-  $loc = (Get-ItemProperty $k).InstallLocation
-  if (-not $loc -or ($loc.TrimEnd('\') -ieq $dir.TrimEnd('\'))) { Remove-Item $k -Recurse -Force }
-}
-"#;
-
 /// Kısayollar, PATH ve (Windows) kaldırma kaydı. Hatalar kurulumu durdurmaz; uyarı olarak döner.
 fn integrate(info: &InstallInfo, exe: &Path, register: bool) -> Vec<String> {
     let mut warnings = vec![];
     if !(register || info.menu_shortcut || info.desktop_shortcut || info.add_path) {
         return warnings;
     }
+    // Windows: kısayollar, PATH ve "Yüklü uygulamalar" kaydı doğrudan Windows API'siyle (PowerShell çalıştırılmaz).
     #[cfg(windows)]
     {
-        let size_kb = std::fs::metadata(exe).map(|m| m.len() / 1024).unwrap_or(0);
-        let flag = |b: bool| if b { "1".to_string() } else { "0".to_string() };
-        let env = [
-            ("FI_EXE", exe.to_string_lossy().to_string()),
-            ("FI_DIR", info.install_dir.to_string_lossy().to_string()),
-            ("FI_VER", info.version.clone()),
-            ("FI_DESC", "FerIDE - yerel yapay zeka geliştirme ortamı".to_string()),
-            ("FI_MENU", flag(info.menu_shortcut)),
-            ("FI_DESKTOP", flag(info.desktop_shortcut)),
-            ("FI_PATH", flag(info.add_path)),
-            ("FI_REG", flag(register)),
-            ("FI_SIZE_KB", size_kb.to_string()),
-        ];
-        if let Err(e) = powershell(&format!("{WIN_PATH_FNS}\n{WIN_INTEGRATE}"), &env) {
-            warnings.push(format!("Kısayollar/kayıt oluşturulamadı: {e}"));
+        use crate::winint;
+        let desc = "FerIDE - yerel yapay zeka geliştirme ortamı";
+        for (wanted, folder, what) in [
+            (info.menu_shortcut, winint::start_menu_programs(), "Başlat menüsü"),
+            (info.desktop_shortcut, winint::desktop(), "Masaüstü"),
+        ] {
+            if !wanted {
+                continue;
+            }
+            let r = folder
+                .ok_or_else(|| anyhow::anyhow!("klasör bulunamadı"))
+                .and_then(|d| winint::create_shortcut(&d.join("FerIDE.lnk"), exe, &info.install_dir, desc));
+            if let Err(e) = r {
+                warnings.push(format!("{what} kısayolu oluşturulamadı: {e}"));
+            }
+        }
+        if info.add_path {
+            if let Err(e) = winint::user_path_add(&info.install_dir) {
+                warnings.push(format!("PATH'e eklenemedi: {e}"));
+            }
+        }
+        if register {
+            if let Err(e) = winint::write_uninstall_entry(winint::UNINSTALL_KEY, info, exe, true) {
+                warnings.push(format!("\"Yüklü uygulamalar\" kaydı oluşturulamadı: {e}"));
+            }
         }
     }
     #[cfg(not(windows))]
@@ -723,9 +591,21 @@ fn remove_integration(info: &InstallInfo, exe: &Path) -> Vec<String> {
     let mut warnings = vec![];
     #[cfg(windows)]
     {
-        let env = [("FI_EXE", exe.to_string_lossy().to_string()), ("FI_DIR", info.install_dir.to_string_lossy().to_string())];
-        if let Err(e) = powershell(&format!("{WIN_PATH_FNS}\n{WIN_REMOVE}"), &env) {
-            warnings.push(format!("Kısayollar/kayıt kaldırılamadı: {e}"));
+        use crate::winint;
+        // Yalnızca bu FerIDE'yi gösteren kısayollar silinir.
+        for folder in [winint::start_menu_programs(), winint::desktop()].into_iter().flatten() {
+            let lnk = folder.join("FerIDE.lnk");
+            if lnk.is_file() && winint::shortcut_target(&lnk).is_some_and(|t| same_path(&t, exe)) {
+                if let Err(e) = std::fs::remove_file(&lnk) {
+                    warnings.push(format!("{} silinemedi: {e}", lnk.display()));
+                }
+            }
+        }
+        if let Err(e) = winint::user_path_remove(&info.install_dir) {
+            warnings.push(format!("PATH'ten çıkarılamadı: {e}"));
+        }
+        if let Err(e) = winint::remove_uninstall_entry(winint::UNINSTALL_KEY, &info.install_dir) {
+            warnings.push(format!("\"Yüklü uygulamalar\" kaydı silinemedi: {e}"));
         }
     }
     #[cfg(not(windows))]
@@ -767,7 +647,7 @@ pub struct UninstallReport {
     /// Silinmeyen (FerIDE'ye ait olmayan) dosyalar ya da silinemeyenler.
     pub leftovers: Vec<String>,
     pub warnings: Vec<String>,
-    /// Windows'ta çalışan program kendini silemez; çıkıştan sonra silinmesi için zamanlandı.
+    /// Windows'ta çalışan program kendini silemez; program klasöründen Geçici klasöre taşındı.
     pub self_delete_scheduled: bool,
 }
 
@@ -808,7 +688,10 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
         if !same_path(&self_file, &exe) {
             let _ = std::fs::remove_file(&exe);
         }
-        r.self_delete_scheduled = schedule_self_delete(&self_file, &info.install_dir);
+        r.self_delete_scheduled = move_running_exe_away(&self_file);
+        if !r.self_delete_scheduled {
+            r.warnings.push(format!("{} FerIDE kapandıktan sonra elle silinebilir.", self_file.display()));
+        }
     } else {
         let _ = std::fs::remove_file(&exe);
     }
@@ -871,44 +754,39 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
     r
 }
 
-/// Kaldırıcı kapandıktan sonra programı ve (boşsa) klasörünü siler. Kaldırıcının son penceresi ne kadar açık
-/// kalırsa kalsın süreç bitene kadar bekler.
-#[cfg(windows)]
-const WIN_SELF_DELETE: &str = r#"
-$ErrorActionPreference = 'SilentlyContinue'
-Wait-Process -Id ([int]$env:FI_PID) -Timeout 1800
-for ($i = 0; $i -lt 40 -and (Test-Path -LiteralPath $env:FI_EXE); $i++) {
-  Remove-Item -LiteralPath $env:FI_EXE -Force
-  if (Test-Path -LiteralPath $env:FI_EXE) { Start-Sleep -Milliseconds 500 }
-}
-if ((Test-Path -LiteralPath $env:FI_DIR) -and -not (Get-ChildItem -LiteralPath $env:FI_DIR -Force | Select-Object -First 1)) {
-  Remove-Item -LiteralPath $env:FI_DIR -Force
-}
-"#;
+/// Kaldırılan programların Geçici klasördeki adı (`feride-kaldirildi-<zaman>.exe`).
+const REMOVED_EXE_PREFIX: &str = "feride-kaldirildi-";
 
-/// Windows: çalışan program kendini silemez. Bu süreç kapandıktan sonra programı ve boş klasörü silen bağımsız
-/// bir süreç başlatır.
+/// Windows: çalışan program kendini silemez ama yeniden adlandırılabilir. Program dosyası Geçici klasöre taşınır
+/// (Windows'un disk temizliği onu sonradan siler; FerIDE yeniden kurulursa o da temizler) ve program klasörü boşalır.
+/// Kendini silmek için arka planda başka bir süreç (eskiden gizli PowerShell) başlatılmaz. Geçici klasör başka bir
+/// sürücüdeyse taşıma olmaz; dosya yerinde kalır.
 #[cfg(windows)]
-fn schedule_self_delete(exe: &Path, dir: &Path) -> bool {
-    use std::os::windows::process::CommandExt;
-    let env = [
-        ("FI_PID", std::process::id().to_string()),
-        ("FI_EXE", exe.to_string_lossy().to_string()),
-        ("FI_DIR", dir.to_string_lossy().to_string()),
-    ];
-    let spawn = |breakaway: bool| {
-        let mut cmd = powershell_cmd(WIN_SELF_DELETE, &env);
-        cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-        // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (+ CREATE_BREAKAWAY_FROM_JOB: başlatan iş nesnesi kapanınca ölmesin)
-        cmd.creation_flags(0x0800_0000 | 0x0000_0200 | if breakaway { 0x0100_0000 } else { 0 });
-        cmd.spawn()
-    };
-    // İş nesnesi ayrılmaya izin vermiyorsa CreateProcess reddeder; o zaman ayrılmadan başlatılır.
-    spawn(true).or_else(|_| spawn(false)).is_ok()
+fn move_running_exe_away(exe: &Path) -> bool {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let dest = std::env::temp_dir().join(format!("{REMOVED_EXE_PREFIX}{stamp}.exe"));
+    for _ in 0..10 {
+        if std::fs::rename(exe, &dest).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    false
+}
+
+/// Önceki kaldırmalardan Geçici klasörde kalan program dosyalarını siler (çalışmıyorlarsa).
+fn cleanup_removed_exes() {
+    let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with(REMOVED_EXE_PREFIX) && name.ends_with(".exe") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 #[cfg(not(windows))]
-fn schedule_self_delete(_exe: &Path, _dir: &Path) -> bool {
+fn move_running_exe_away(_exe: &Path) -> bool {
     false
 }
 
@@ -968,6 +846,28 @@ mod tests {
         d
     }
 
+    /// Kaldırırken çalışan program dosyası Geçici klasöre taşınır (arka planda kendini silen bir süreç başlatılmaz);
+    /// sonraki kurulum oradaki artıkları temizler.
+    #[cfg(windows)]
+    #[test]
+    fn running_exe_moves_to_temp() {
+        let dir = tmp("tasima");
+        let exe = dir.join(exe_name());
+        std::fs::write(&exe, b"MZ deneme").unwrap();
+        assert!(move_running_exe_away(&exe));
+        assert!(!exe.exists());
+        let moved: Vec<PathBuf> = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(REMOVED_EXE_PREFIX)))
+            .collect();
+        assert!(moved.iter().any(|p| std::fs::read(p).is_ok_and(|b| b == b"MZ deneme")));
+        cleanup_removed_exes();
+        assert!(moved.iter().all(|p| !p.exists()));
+        assert!(std::fs::remove_dir(&dir).is_ok(), "program klasörü boşalmalı");
+    }
+
     /// Kaldırma kaydı PowerShell'siz yazılır. Gerçek kayda değil, test için açılan ayrı bir anahtara yazar ve siler.
     #[cfg(windows)]
     #[test]
@@ -987,7 +887,7 @@ mod tests {
             add_path: false,
             installed_at: String::new(),
         };
-        write_uninstall_entry(&key, &info, &exe).unwrap();
+        crate::winint::write_uninstall_entry(&key, &info, &exe, true).unwrap();
         let read = |name: &str| -> String {
             let mut buf = [0u16; 512];
             let mut size = (buf.len() * 2) as u32;
@@ -1002,7 +902,7 @@ mod tests {
         assert_eq!(read("DisplayVersion"), "5.4.0-beta.99");
         assert!(read("QuietUninstallString").ends_with("\" uninstall --yes"));
         // İkinci yazım (sonraki güncelleme) sürümü değiştirir.
-        write_uninstall_entry(&key, &InstallInfo { version: "5.4.0-beta.100".into(), ..info }, &exe).unwrap();
+        crate::winint::write_uninstall_entry(&key, &InstallInfo { version: "5.4.0-beta.100".into(), ..info }, &exe, false).unwrap();
         assert_eq!(read("DisplayVersion"), "5.4.0-beta.100");
         let k = wide(&key);
         // SAFETY: yalnızca bu testin oluşturduğu anahtar silinir.

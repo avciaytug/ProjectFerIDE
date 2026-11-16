@@ -409,6 +409,33 @@ fn gpu_name_key(s: &str) -> String {
     s.to_lowercase().replace("(tm)", "").replace("(r)", "").chars().filter(|c| c.is_ascii_alphanumeric()).collect()
 }
 
+/// Windows'taki ekran kartlarının sürücü adları (kayıt defterinden; PowerShell/WMI çalıştırılmaz).
+#[cfg(windows)]
+pub fn windows_gpu_names() -> Vec<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    const CLASS: &str = "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let desc_name = wide("DriverDesc");
+    let mut names = vec![];
+    for i in 0..32 {
+        let key = wide(&format!("{CLASS}\\{i:04}"));
+        let mut buf = [0u16; 512];
+        let mut size = (buf.len() * 2) as u32;
+        // SAFETY: arabellek ve boyutu birlikte verilir; yalnızca okuma yapılır.
+        let rc = unsafe {
+            RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), desc_name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size)
+        };
+        if rc == 0 {
+            let len = (size as usize / 2).min(buf.len());
+            let name = String::from_utf16_lossy(&buf[..len]).trim_end_matches('\0').trim().to_string();
+            if !name.is_empty() && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
 #[cfg(windows)]
 fn windows_dedicated_vram(gpu_name: &str) -> Option<u64> {
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_ANY, RRF_RT_REG_SZ};

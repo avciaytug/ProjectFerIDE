@@ -1,5 +1,31 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.20) — PowerShell'siz Windows bütünleşmesi, "nul" dosyaları
+
+- **FerIDE artık kendi işleri için PowerShell çalıştırmıyor.** Microsoft Defender, beta.19'u
+  "Trojan:Win32/Bearfoos.B!ml" sanıp karantinaya aldı. Bu, makine öğrenmesine dayalı yanlış bir alarmdı; programın
+  içinde kötü amaçlı yazılımlarla aynı biçimde yazılmış PowerShell kalıpları vardı. Hepsi doğrudan Windows API'siyle
+  yeniden yazıldı:
+  - Başlat menüsü ve masaüstü kısayolları Windows'un kısayol arayüzüyle (IShellLink) oluşturuluyor. Önceden gizli
+    pencerede `powershell -ExecutionPolicy Bypass -EncodedCommand` ve WScript kullanılıyordu.
+  - Kullanıcı PATH'i ve "Yüklü uygulamalar" kaydı Kayıt Defteri API'siyle yazılıyor. PATH'teki diğer girdilere, boş
+    olanlar dahil, dokunulmuyor.
+  - Kaldırırken çalışan program dosyası Windows'un Geçici klasörüne taşınıyor. Önceden FerIDE kapandıktan sonra onu
+    silmek için gizli bir PowerShell başlatılıyordu.
+  - Kurulum'daki yönetici adımı (Visual C++ çalışma zamanı, uzun yollar): FerIDE kendisini yönetici olarak açıp işi
+    doğrudan yapıyor. Önceden gizli pencerede yönetici PowerShell betiği çalışıyordu; UAC penceresinde artık
+    "Windows PowerShell" yerine FerIDE görünüyor.
+  - ROCm için ekran kartı adları kayıt defterinden okunuyor (önceden `powershell Get-CimInstance`).
+  - Bağlantı ve dosya açma Windows'un `ShellExecuteEx` işleviyle yapılıyor. Kullanılan kütüphane her seferinde gizli
+    bir PowerShell başlatıyordu.
+  - Ajanın yedek PowerShell kabuğu `-ExecutionPolicy Bypass` yerine `RemoteSigned` kullanıyor.
+- **Gezginde "Sil" artık `nul`, `con`, `aux` gibi adlı dosyaları da siliyor.** Windows bu adları aygıt olarak
+  yorumladığından dosya açılamıyor, taşınamıyor, silinemiyordu. Dosya işlemleri artık `\\?\` önekli ham yol
+  kullanıyor; okuma ve yeniden adlandırma da çalışıyor. Bu adlarla yeni dosya oluşturmak açık bir hatayla engelleniyor.
+- **Ajan bu dosyaları artık oluşturmuyor.** Git Bash'te `komut 2>nul` çıktıyı atmaz, `nul` adlı bir dosyaya yazar.
+  Kullanıcının bilgisayarındaki dosyada `wmic: command not found` yazıyordu. Ajanın bash komutlarındaki `>nul`,
+  `2>nul`, `<nul` yönlendirmeleri artık çalıştırılmadan önce `/dev/null`'a çevriliyor.
+
 ## beta v5.4 (5.4.0-beta.19) — Ctrl+T, isteğe bağlı güncelleme, Windows engelleri
 
 - **Terminal kısayolu artık Ctrl+T** (Türkçe klavyede ters tırnak AltGr istiyordu). Terminal odaktayken de paneli

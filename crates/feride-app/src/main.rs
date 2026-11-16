@@ -96,6 +96,46 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// Kurulum'daki yönetici adımı: FerIDE bunu kendisini yönetici olarak (UAC onayıyla) açarak çalıştırır.
+    #[command(hide = true)]
+    AdminSetup {
+        /// Kurulacak Visual C++ çalışma zamanı (vc_redist).
+        #[arg(long)]
+        vcredist: Option<std::path::PathBuf>,
+        /// Windows'ta uzun yolları aç.
+        #[arg(long)]
+        longpaths: bool,
+        /// Sonuçların yazılacağı dosya.
+        #[arg(long)]
+        result: std::path::PathBuf,
+    },
+}
+
+/// Yönetici olarak açılan FerIDE'nin yaptığı tek seferlik sistem ayarları. Sonuçlar `result` dosyasına
+/// "ad=çıkış_kodu" satırları olarak yazılır (0: başarılı).
+fn admin_setup(vcredist: Option<std::path::PathBuf>, longpaths: bool, result: &std::path::Path) -> i32 {
+    let mut log: Vec<String> = vec![];
+    if let Some(v) = vcredist {
+        let code = std::process::Command::new(&v)
+            .args(["/install", "/quiet", "/norestart"])
+            .status()
+            .ok()
+            .and_then(|s| s.code())
+            .unwrap_or(-1);
+        log.push(format!("vcredist={code}"));
+    }
+    if longpaths {
+        #[cfg(windows)]
+        let code = match feride_core::winint::enable_long_paths() {
+            Ok(()) => 0,
+            Err(e) => e.raw_os_error().unwrap_or(-1),
+        };
+        #[cfg(not(windows))]
+        let code = 0;
+        log.push(format!("longpaths={code}"));
+    }
+    let _ = std::fs::write(result, log.join("\n"));
+    0
 }
 
 fn attach_console() {
@@ -160,6 +200,10 @@ fn main() {
         // Eski sürüm kapanıp tek örnek kilidini bırakana kadar bekle.
         feride_core::update::wait_for_exit(pid, std::time::Duration::from_secs(60));
     }
+    // Yönetici adımı: yalnızca istenen sistem ayarını yapıp çıkar (günlük, sunucu, pencere yok).
+    if let Some(Cmd::AdminSetup { vcredist, longpaths, result }) = &cli.cmd {
+        std::process::exit(admin_setup(vcredist.clone(), *longpaths, result));
+    }
     // Kurulum ve kaldırma veri klasörüne dokunmadan çalışır (kullanıcı henüz yer seçmemiş olabilir).
     match cli.cmd {
         Some(Cmd::Install { dir, data, yes, update, no_shortcuts, no_path, no_launch, print_url }) => {
@@ -198,6 +242,7 @@ fn main() {
         Some(Cmd::Install { .. }) | Some(Cmd::Uninstall { .. }) => unreachable!("yukarıda işlendi"),
         Some(Cmd::Doctor) => rt.block_on(doctor(paths)),
         Some(Cmd::Update { check }) => std::process::exit(rt.block_on(update_cmd(paths, check))),
+        Some(Cmd::AdminSetup { .. }) => unreachable!("yukarıda işlendi"),
         Some(Cmd::Setup { ids }) => rt.block_on(setup(paths, ids)),
         Some(Cmd::Serve { port, listen, open }) => {
             let Some(_lock) = instance_lock(&paths) else {

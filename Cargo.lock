@@ -1066,7 +1066,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "feride-app"
-version = "5.4.0-beta.19"
+version = "5.4.0-beta.20"
 dependencies = [
  "anyhow",
  "axum",
@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "feride-core"
-version = "5.4.0-beta.19"
+version = "5.4.0-beta.20"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1126,6 +1126,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
  "zip",
 ]
@@ -2552,6 +2553,7 @@ version = "5.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d8c8b8e725ad26404d6896eb2f064294a0a7b4f1d9120210d85544684c4ca95"
 dependencies = [
+ "dunce",
  "is-wsl",
  "libc",
 ]

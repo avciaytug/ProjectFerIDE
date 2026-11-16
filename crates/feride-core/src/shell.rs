@@ -5,9 +5,21 @@
 //! `System32\bash.exe`'si seçilmez. Bulunamazsa PowerShell kullanılır ve ajan buna göre
 //! bilgilendirilir.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use crate::paths::Paths;
+
+/// Git Bash'te `komut 2>nul` Windows'taki gibi "çıktıyı at" demek değildir: çalışma klasöründe `nul` adlı bir dosya
+/// oluşturur ve Windows bu dosyayı normal yollarla açamaz, taşıyamaz, silemez (`nul` aygıt adıdır). Modeller bu
+/// Windows alışkanlığıyla sık yazdığı için bash komutlarındaki `nul` yönlendirmeleri `/dev/null`'a çevrilir.
+/// (`> nul.txt`, `>null` gibi gerçek dosya adlarına dokunulmaz.)
+pub fn fix_nul_redirects(command: &str) -> Cow<'_, str> {
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)(\d?>>?|&>>?|\d?<)[ \t]*nul:?(\s|$|[;&|)])").unwrap());
+    RE.replace_all(command, "${1}/dev/null${2}")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShellKind {
@@ -68,8 +80,9 @@ impl Shell {
                 vec![
                     "-NoProfile".into(),
                     "-NonInteractive".into(),
+                    // RemoteSigned: çalışma alanındaki betikler çalışır; internetten inen imzasız betikler çalışmaz.
                     "-ExecutionPolicy".into(),
-                    "Bypass".into(),
+                    "RemoteSigned".into(),
                     "-Command".into(),
                     format!(
                         "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $ProgressPreference='SilentlyContinue'; {command}"
@@ -154,4 +167,26 @@ fn find_git_bash(paths: &Paths) -> Option<PathBuf> {
     c.into_iter().find(|p| {
         p.is_file() && !p.to_string_lossy().to_lowercase().contains("\\windows\\system32\\")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fix_nul_redirects as f;
+
+    #[test]
+    fn nul_redirects_become_dev_null() {
+        // Kullanıcının bilgisayarındaki "nul" dosyasını bırakan komut türü.
+        assert_eq!(f("wmic cpu get name 2>nul"), "wmic cpu get name 2>/dev/null");
+        assert_eq!(f("dir /b >nul 2>&1 && echo ok"), "dir /b >/dev/null 2>&1 && echo ok");
+        assert_eq!(f("git status > NUL"), "git status >/dev/null");
+        assert_eq!(f("echo hi>nul; ls"), "echo hi>/dev/null; ls");
+        assert_eq!(f("cmd &>nul"), "cmd &>/dev/null");
+        assert_eq!(f("cmd 2>>NUL:"), "cmd 2>>/dev/null");
+        assert_eq!(f("read x <nul"), "read x </dev/null");
+        assert_eq!(f("(a 2>nul)|b"), "(a 2>/dev/null)|b");
+        // Gerçek dosya adlarına ve doğru yazılmış komutlara dokunulmaz.
+        for same in ["echo x > nul.txt", "echo x >null", "cat annul", "x 2>/dev/null", "echo nul", "x > nul_log"] {
+            assert_eq!(f(same), same);
+        }
+    }
 }
