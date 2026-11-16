@@ -1,5 +1,13 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.21) — Kaldırıcı her sürücüde programı siliyor
+
+- Windows'ta kaldırıcı, kurulum programlarının yaptığı gibi kendini Geçici klasöre kopyalayıp oradan çalışıyor.
+  Böylece program klasöründeki `feride.exe` doğrudan siliniyor. beta.20'de çalışan dosya Geçici klasöre *taşınıyordu*;
+  FerIDE başka bir sürücüye (ör. `D:\Programlar`) kuruluysa bu yapılamıyor ve dosya yerinde kalıyordu. Geçici
+  klasördeki kopya bir sonraki kurulumda temizleniyor.
+- Kaldırırken önce veriler (istenirse), en son program dosyası siliniyor.
+
 ## beta v5.4 (5.4.0-beta.20) — PowerShell'siz Windows bütünleşmesi, "nul" dosyaları
 
 - **FerIDE artık kendi işleri için PowerShell çalıştırmıyor.** Microsoft Defender, beta.19'u

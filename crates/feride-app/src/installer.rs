@@ -38,6 +38,8 @@ pub struct UninstallArgs {
     pub purge: bool,
     pub wait_pid: Option<u32>,
     pub notify: bool,
+    /// Geçici klasördeki kaldırıcı kopyası için: kaldırılacak program klasörü.
+    pub from_dir: Option<std::path::PathBuf>,
 }
 
 /// Kurulum ve kaldırma günlüğü geçici klasöre yazılır (veri klasörü henüz seçilmemiş olabilir).
@@ -482,15 +484,53 @@ fn show_info(title: &str, text: &str) {
     println!("{title}\n{text}");
 }
 
+/// Windows: çalışan program kendi dosyasını silemez, başka bir sürücüye de taşıyamaz. Kaldırıcı, kurulum
+/// programlarının yaptığı gibi kendini Geçici klasöre kopyalayıp oradan yeniden başlar ve kapanır; kopya bu süreç
+/// bitince kaldırmayı yapar ve program klasöründeki dosyayı doğrudan siler. (Eskiden kapanıştan sonra dosyayı silmek
+/// için gizli bir PowerShell başlatılıyordu.) Kopya bir sonraki kurulumda temizlenir.
+#[cfg(windows)]
+fn relaunch_from_temp(a: &UninstallArgs, info: &InstallInfo) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let copy = install::uninstaller_copy_path();
+    std::fs::copy(current_exe()?, &copy)?;
+    let mut c = std::process::Command::new(&copy);
+    c.args(["uninstall", "--wait-pid", &std::process::id().to_string(), "--from-dir"]).arg(&info.install_dir);
+    for (on, flag) in [(a.yes, "--yes"), (a.purge, "--purge"), (a.notify, "--notify")] {
+        if on {
+            c.arg(flag);
+        }
+    }
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.creation_flags(0x0000_0008 | 0x0000_0200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    c.spawn()?;
+    Ok(())
+}
+
 /// `feride uninstall`
 pub fn cli_uninstall(a: UninstallArgs) -> i32 {
     if let Some(pid) = a.wait_pid {
         wait_for_exit(pid);
     }
-    let Some(info) = install::running_installed().or_else(install::find_existing) else {
+    let found = match &a.from_dir {
+        Some(d) => install::info_in(d).filter(|i| install::same_path(&i.install_dir, d)),
+        None => install::running_installed().or_else(install::find_existing),
+    };
+    let Some(info) = found else {
         show_info("FerIDE kurulu değil", "Kaldırılacak bir FerIDE kurulumu bulunamadı. Kurmadan kullandıysanız klasörünü silmeniz yeterli.");
         return 1;
     };
+    #[cfg(windows)]
+    if a.from_dir.is_none() && install::running_installed().is_some() {
+        match relaunch_from_temp(&a, &info) {
+            Ok(()) => {
+                if a.yes && !a.notify {
+                    println!("FerIDE kaldırılıyor…");
+                }
+                return 0;
+            }
+            Err(e) => tracing::warn!("kaldırıcı Geçici klasörden başlatılamadı ({e}); yerinde kaldırılıyor"),
+        }
+    }
     let purge = if a.yes {
         a.purge
     } else {

@@ -89,6 +89,9 @@ enum Cmd {
         wait_pid: Option<u32>,
         #[arg(long, hide = true)]
         notify: bool,
+        /// Geçici klasördeki kaldırıcı kopyası için: kaldırılacak program klasörü.
+        #[arg(long, hide = true)]
+        from_dir: Option<std::path::PathBuf>,
     },
     /// GitHub'da yeni sürüm varsa indirip kurar (açık FerIDE yeniden başlatılınca geçerli olur).
     Update {
@@ -219,9 +222,9 @@ fn main() {
                 print_url,
             }));
         }
-        Some(Cmd::Uninstall { yes, purge, wait_pid, notify }) => {
+        Some(Cmd::Uninstall { yes, purge, wait_pid, notify, from_dir }) => {
             let _g = installer::init_logging();
-            std::process::exit(installer::cli_uninstall(installer::UninstallArgs { yes, purge, wait_pid, notify }));
+            std::process::exit(installer::cli_uninstall(installer::UninstallArgs { yes, purge, wait_pid, notify, from_dir }));
         }
         None if installer::should_offer_install() => {
             // Kurulmamış bir kopya açıldı (ör. indirilenlerden): önce kurulum sihirbazı.

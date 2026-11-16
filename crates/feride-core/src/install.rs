@@ -673,6 +673,42 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
         r.warnings.extend(remove_integration(info, &exe));
     }
 
+    // Veri klasörü (program dosyasından önce: program dosyası kaybolduğunda kaldırma bitmiş olur).
+    if purge {
+        let d = &info.data_dir;
+        if is_dangerous(d) || !looks_like_data(d) {
+            r.warnings.push(format!("{} bir FerIDE veri klasörüne benzemiyor; silinmedi.", d.display()));
+        } else {
+            // Veri klasöründen çalışan motorlar dosyaları kilitler; silmeden önce kapatılır.
+            let exec_dirs: Vec<PathBuf> = DATA_EXEC_DIRS.iter().map(|s| d.join(s)).filter(|p| p.is_dir()).collect();
+            if !exec_dirs.is_empty() {
+                stop_matching(|e| exec_dirs.iter().any(|x| is_inside(e, x)));
+            }
+            for e in DATA_ENTRIES {
+                let p = d.join(e);
+                if p.exists() {
+                    // Kapanmakta olan süreçler (WebView, motorlar) dosyaları kısa süre kilitli tutabilir.
+                    let mut res = remove_entry(&p);
+                    for _ in 0..6 {
+                        if res.is_ok() || !p.exists() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(500));
+                        res = remove_entry(&p);
+                    }
+                    if let Err(err) = res.and_then(|_| if p.exists() { Err(std::io::Error::other("hâlâ var")) } else { Ok(()) }) {
+                        r.warnings.push(format!("{} silinemedi: {err}", p.display()));
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir(d);
+            r.removed_data = !d.exists();
+            if d.exists() {
+                r.leftovers.extend(leftovers_of(d));
+            }
+        }
+    }
+
     // Program klasörü. Kaldırıcı, güncellemeden sonra henüz yeniden başlatılmamış eski dosyadan (`feride.old.exe`)
     // da çalışıyor olabilir.
     let me = std::env::current_exe().ok().map(|m| dunce::canonicalize(&m).unwrap_or(m));
@@ -709,41 +745,6 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
         r.leftovers.extend(leftovers_of(&info.install_dir));
     }
 
-    // Veri klasörü
-    if purge {
-        let d = &info.data_dir;
-        if is_dangerous(d) || !looks_like_data(d) {
-            r.warnings.push(format!("{} bir FerIDE veri klasörüne benzemiyor; silinmedi.", d.display()));
-        } else {
-            // Veri klasöründen çalışan motorlar dosyaları kilitler; silmeden önce kapatılır.
-            let exec_dirs: Vec<PathBuf> = DATA_EXEC_DIRS.iter().map(|s| d.join(s)).filter(|p| p.is_dir()).collect();
-            if !exec_dirs.is_empty() {
-                stop_matching(|e| exec_dirs.iter().any(|x| is_inside(e, x)));
-            }
-            for e in DATA_ENTRIES {
-                let p = d.join(e);
-                if p.exists() {
-                    // Kapanmakta olan süreçler (WebView, motorlar) dosyaları kısa süre kilitli tutabilir.
-                    let mut res = remove_entry(&p);
-                    for _ in 0..6 {
-                        if res.is_ok() || !p.exists() {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(500));
-                        res = remove_entry(&p);
-                    }
-                    if let Err(err) = res.and_then(|_| if p.exists() { Err(std::io::Error::other("hâlâ var")) } else { Ok(()) }) {
-                        r.warnings.push(format!("{} silinemedi: {err}", p.display()));
-                    }
-                }
-            }
-            let _ = std::fs::remove_dir(d);
-            r.removed_data = !d.exists();
-            if d.exists() {
-                r.leftovers.extend(leftovers_of(d));
-            }
-        }
-    }
     let pointer = pointer_file();
     if system && read_info(&pointer).is_some_and(|p| same_path(&p.install_dir, &info.install_dir)) {
         let _ = std::fs::remove_file(&pointer);
@@ -754,17 +755,22 @@ pub fn uninstall(info: &InstallInfo, purge: bool, system: bool) -> UninstallRepo
     r
 }
 
-/// Kaldırılan programların Geçici klasördeki adı (`feride-kaldirildi-<zaman>.exe`).
-const REMOVED_EXE_PREFIX: &str = "feride-kaldirildi-";
+/// Kaldırıcının Geçici klasördeki kopyasının (ve oraya taşınan programın) adı: `feride-kaldirici-<zaman>.exe`.
+const REMOVED_EXE_PREFIX: &str = "feride-kaldirici-";
 
-/// Windows: çalışan program kendini silemez ama yeniden adlandırılabilir. Program dosyası Geçici klasöre taşınır
-/// (Windows'un disk temizliği onu sonradan siler; FerIDE yeniden kurulursa o da temizler) ve program klasörü boşalır.
-/// Kendini silmek için arka planda başka bir süreç (eskiden gizli PowerShell) başlatılmaz. Geçici klasör başka bir
-/// sürücüdeyse taşıma olmaz; dosya yerinde kalır.
+/// Geçici klasörde yeni bir kaldırıcı kopyası için yol. Kaldırıcı bu kopyadan çalışınca program klasöründeki dosya
+/// serbest kalır ve doğrudan silinir (çalışan program kendi dosyasını silemez).
+pub fn uninstaller_copy_path() -> PathBuf {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    std::env::temp_dir().join(format!("{REMOVED_EXE_PREFIX}{stamp}{}", if cfg!(windows) { ".exe" } else { "" }))
+}
+
+/// Windows yedek yolu (kaldırıcı Geçici klasörden başlatılamadıysa): çalışan program kendini silemez ama aynı sürücüde
+/// yeniden adlandırılabilir; Geçici klasöre taşınır ve program klasörü boşalır. Geçici klasör başka bir sürücüdeyse
+/// taşıma olmaz; dosya yerinde kalır ve kullanıcıya söylenir.
 #[cfg(windows)]
 fn move_running_exe_away(exe: &Path) -> bool {
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let dest = std::env::temp_dir().join(format!("{REMOVED_EXE_PREFIX}{stamp}.exe"));
+    let dest = uninstaller_copy_path();
     for _ in 0..10 {
         if std::fs::rename(exe, &dest).is_ok() {
             return true;
