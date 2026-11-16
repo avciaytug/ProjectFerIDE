@@ -129,6 +129,9 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
   henüz imzalı değil. **Windows Güvenlik → Uygulama ve tarayıcı denetimi → Akıllı Uygulama Denetimi ayarları →
   Kapalı** yapın ve FerIDE'yi yeniden başlatın. FerIDE bu durumu kendisi de algılayıp açıklar. Windows'un Nisan 2026
   ve sonraki güncellemelerinde bu ayar sonradan yeniden açılabilir.
+- **Kurulum "Uygulama Denetimi ilkesi bu dosyayı engelledi" diyorsa:** Akıllı Uygulama Denetimi, imzasız ve henüz
+  tanımadığı yeni FerIDE sürümünü çalıştırmıyor. Kurulum betiği bunu algılayıp açıklar ve Windows Güvenlik'in ilgili
+  sayfasını açar: **Akıllı Uygulama Denetimi ayarları → Kapalı** yapıp kurulum komutunu yeniden çalıştırın.
 - **"Bu uygulamanın bir kısmı engellendi … ggml-cpu-….dll" bildirimleri:** llama.cpp her açılışta bütün işlemci
   çeşitlerini (`ggml-cpu-*.dll`) deneyip en uygununu seçer; Akıllı Uygulama Denetimi bunlardan bazılarını engelleyip
   bildirim gösterir. FerIDE (beta.18'den itibaren) ilk donanım ölçümünde bu bilgisayarda kullanılan çeşidi bulur,

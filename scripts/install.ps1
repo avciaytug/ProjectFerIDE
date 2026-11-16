@@ -22,6 +22,36 @@ $headers = @{ 'User-Agent' = 'FerIDE-installer' }
 # Komut satırı argümanı olarak tırnaklı yol (sondaki \ işaretleri tırnağı kaçırmasın diye ikilenir).
 function Format-PathArg([string]$p) { '"' + ($p -replace '(\\+)$', '$1$1') + '"' }
 
+# Windows Akıllı Uygulama Denetimi / Uygulama Denetimi programı engelledi mi? (Start-Process hatası; 4551:
+# "Uygulama Denetimi ilkesi bu dosyayı engelledi", 4556-4559 ve 4580-4582: itibar denetimi.)
+function Test-PolicyBlock($err) {
+    $e = $err.Exception
+    while ($e) {
+        if ($e -is [System.ComponentModel.Win32Exception] -and @(4551, 4556, 4557, 4558, 4559, 4580, 4581, 4582) -contains $e.NativeErrorCode) { return $true }
+        $e = $e.InnerException
+    }
+    return "$($err.Exception.Message)" -match 'Uygulama Denetimi|Application Control|Akıllı Uygulama|Smart App'
+}
+
+function Show-PolicyBlockHelp {
+    Write-Host ""
+    Write-Host "Windows Akıllı Uygulama Denetimi (Smart App Control) FerIDE'yi engelledi." -ForegroundColor Yellow
+    Write-Host "Neden: FerIDE henüz dijital olarak imzalı değil ve Windows bu yeni sürümü henüz tanımıyor. Bu, FerIDE'de" -ForegroundColor Yellow
+    Write-Host "virüs bulunduğu anlamına gelmez; Windows imzasız ve tanımadığı programları çalıştırmıyor." -ForegroundColor Yellow
+    Write-Host "Bilgisayarınızda bir değişiklik yapılmadı." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Bu bilgisayara kurmak için:"
+    Write-Host "  1. Windows Güvenlik > Uygulama ve tarayıcı denetimi > Akıllı Uygulama Denetimi ayarları > Kapalı"
+    Write-Host "  2. Bu komutu yeniden çalıştırın:"
+    Write-Host "     irm https://raw.githubusercontent.com/$Repo/main/scripts/install.ps1 | iex" -ForegroundColor Cyan
+    Write-Host "(Windows'un Nisan 2026 ve sonraki güncellemelerinde bu ayar sonradan yeniden açılabilir.)"
+    if ([Environment]::UserInteractive) {
+        Write-Host ""
+        Write-Host "Windows Güvenlik'in ilgili sayfası açılıyor..."
+        try { Start-Process 'windowsdefender://appbrowser' } catch { }
+    }
+}
+
 Write-Host "FerIDE indiriliyor..." -ForegroundColor Cyan
 $releases = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases?per_page=20"
 # GitHub listeyi sürüm adına göre sıralayabiliyor ("beta.9" > "beta.10"); en yeni yayın en başta olsun.
@@ -41,6 +71,7 @@ $sumAsset = $release.assets | Where-Object { $_.name -eq "$AssetName.sha256" }
 $tmp = Join-Path $env:TEMP "feride-install-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $code = 1
+$blocked = $false
 try {
     $zip = Join-Path $tmp $AssetName
     Write-Host "İndiriliyor: $($release.tag_name) ($([math]::Round($asset.size / 1MB, 1)) MB)"
@@ -78,15 +109,28 @@ try {
     if ($env:FERIDE_NO_LAUNCH -eq '1') { $argList += '--no-launch' }
 
     # "Start-Process -Wait" açılan FerIDE'yi de bekler; burada yalnızca kurulum sürecinin bitmesi beklenir.
-    $p = Start-Process -FilePath $exe -ArgumentList ($argList -join ' ') -WorkingDirectory $env:TEMP -PassThru
-    $null = $p.Handle # çıkış kodunun okunabilmesi için
-    $p.WaitForExit()
-    $code = $p.ExitCode
+    try {
+        $p = Start-Process -FilePath $exe -ArgumentList ($argList -join ' ') -WorkingDirectory $env:TEMP -PassThru
+    } catch {
+        if (Test-PolicyBlock $_) { $blocked = $true } else { throw }
+    }
+    if (-not $blocked) {
+        $null = $p.Handle # çıkış kodunun okunabilmesi için
+        $p.WaitForExit()
+        $code = $p.ExitCode
+        # Program başlayıp "Bozuk Görüntü" (0xC0E90002) koduyla kapatıldıysa da Akıllı Uygulama Denetimi engellemiştir.
+        if ($code -eq -1058471934) { $blocked = $true }
+    }
 } finally {
     for ($i = 0; $i -lt 10 -and (Test-Path $tmp); $i++) {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         if (Test-Path $tmp) { Start-Sleep -Milliseconds 500 }
     }
+}
+
+if ($blocked) {
+    Show-PolicyBlockHelp
+    return
 }
 
 if ($code -eq 2) {
@@ -103,14 +147,11 @@ if ($code -eq 2) {
     }
     Write-Host "Kaldırmak için: Ayarlar > Uygulamalar > FerIDE > Kaldır"
 
-    # Windows 11 Akıllı Uygulama Denetimi açıksa imzasız llama.cpp "Bozuk Görüntü (0xc0e90002)" hatasıyla engellenir.
+    # Windows 11 Akıllı Uygulama Denetimi açıksa imzasız bileşenlerden bazılarını (llama.cpp, ses motoru) engelleyebilir.
     $sac = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name VerifiedAndReputablePolicyState -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
     if ($sac -eq 1) {
         Write-Host ""
-        Write-Host "UYARI: Windows Akıllı Uygulama Denetimi (Smart App Control) açık." -ForegroundColor Yellow
-        Write-Host "FerIDE'nin model motoru llama.cpp henüz dijital olarak imzalı olmadığı için Windows onu engeller" -ForegroundColor Yellow
-        Write-Host '("Bozuk Görüntü 0xc0e90002" hatası). Çözüm:' -ForegroundColor Yellow
-        Write-Host "  Windows Güvenlik > Uygulama ve tarayıcı denetimi > Akıllı Uygulama Denetimi ayarları > Kapalı" -ForegroundColor Yellow
-        Write-Host "  ardından FerIDE'yi yeniden başlatın. (Windows'un Nisan 2026 ve sonraki güncellemelerinde ayar sonradan yeniden açılabilir.)" -ForegroundColor Yellow
+        Write-Host "Not: Windows Akıllı Uygulama Denetimi (Smart App Control) açık. FerIDE'nin bileşenleri henüz dijital" -ForegroundColor Yellow
+        Write-Host "olarak imzalı olmadığından Windows bazılarını engelleyebilir; engellerse FerIDE nedenini ve çözümünü gösterir." -ForegroundColor Yellow
     }
 }
