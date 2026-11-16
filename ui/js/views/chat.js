@@ -135,18 +135,25 @@ function renderFoot() {
     h('span', { class: `dot ${dot}` }), h('span', { class: 'nowrap name' }, name),
     st === 'starting' && !remote ? h('span', { class: 'muted' }, 'yükleniyor…') : null, icon('chevD'));
 
-  const MODES = [['plan', 'Plan (salt okunur)'], ['ask', 'Her işlemde sor'], ['auto_edit', 'Düzenlemelere izin ver'], ['full_auto', 'Tam otonom']];
+  // [değer, etiket, açıklama] — açıklamalar (eskiden Ayarlar'daki "İzin modu" bölümündeydi) üzerine gelince görünür.
+  const MODES = [
+    ['plan', 'Plan (salt okunur)', 'İnceler, araştırır, plan sunar; hiçbir şeyi değiştirmez.'],
+    ['ask', 'Her işlemde sor', 'Okuma dışındaki her işlem için onay ister.'],
+    ['auto_edit', 'Düzenlemelere izin ver', 'Çalışma alanındaki dosya değişikliklerine izin verir; komutları sorar. (Önerilen)'],
+    ['full_auto', 'Tam otonom', 'Hiçbir şey sorulmaz. Yıkıcı komutlar, FerIDE ayarları, kimlik bilgisi klasörleri ve yerel ağ istekleri yine korunur.'],
+  ];
   const curMode = S.settings?.agent?.permission_mode || 'auto_edit';
+  const curDesc = MODES.find((m) => m[0] === curMode)?.[2] || '';
   const mode = h('select', {
     class: `pill mode-pick mode-${curMode}`,
-    title: 'İzin modu: ajanın neleri sormadan yapabileceği. Görev sürerken de değiştirilebilir.',
+    title: `İzin modu: ajanın neleri sormadan yapabileceği (görev sürerken de değiştirilebilir).\nŞu an: ${curDesc}\n\nHer modda geçerli korumalar: disk biçimlendirme, sistem klasörünü ya da gölge kopyaları silme gibi komutlar engellenir; ajan FerIDE'nin kendi ayar ve sır dosyalarını değiştiremez; .ssh/.aws gibi klasörlere yazma, başlangıç klasörleri ve yerel ağ adresleri her zaman onaya tabidir; ajanın değiştirdiği her dosyanın önceki hâli saklanır ve sohbetten geri alınabilir.`,
     onchange: async (e) => {
       const v = e.target.value;
       await saveSettings({ agent: { permission_mode: v } }).catch(() => {});
       toast(`İzin modu: ${MODES.find((m) => m[0] === v)?.[1] || v}`);
       renderFoot();
     },
-  }, MODES.map(([v, l]) => h('option', { value: v, selected: v === curMode }, l)));
+  }, MODES.map(([v, l, d]) => h('option', { value: v, selected: v === curMode, title: d }, l)));
 
   footEl.append(think, picker, mode, h('span', { class: 'spacer' }));
   const u = lastUsage;

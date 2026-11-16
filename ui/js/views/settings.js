@@ -149,24 +149,12 @@ function general(body) {
 
 function agent(body) {
   const a = S.settings.agent;
-  const modes = [
-    ['plan', 'Plan', 'Salt okunur: inceler, araştırır, plan sunar; hiçbir şeyi değiştirmez.'],
-    ['ask', 'Her işlemde sor', 'Okuma dışındaki her işlem için onay ister.'],
-    ['auto_edit', 'Düzenlemelere izin ver', 'Çalışma alanındaki dosya değişikliklerine izin verir; komutları sorar. (Önerilen)'],
-    ['full_auto', 'Tam otonom', 'Hiçbir şey sorulmaz. Yıkıcı komutlar, FerIDE ayarları, kimlik bilgisi klasörleri ve yerel ağ istekleri yine korunur.'],
-  ];
-  body.append(h('div', { class: 'section' },
-    h('div', { class: 'sh' }, icon('shield'), h('h3', {}, 'İzin modu')),
-    h('div', { class: 'col' }, modes.map(([v, l, d]) => h('label', { class: 'check', style: { alignItems: 'flex-start', padding: '6px 0' } },
-      h('input', { type: 'radio', name: 'pm', checked: a.permission_mode === v, onchange: () => saveSettings({ agent: { permission_mode: v } }) }),
-      h('div', {}, h('b', {}, l), h('div', { class: 'muted small' }, d))))),
-    h('div', { class: 'tiny muted', style: { marginTop: '8px' } }, 'Her modda geçerli korumalar: disk biçimlendirme, sistem klasörünü silme, gölge kopyaları silme gibi komutlar engellenir; ajan FerIDE\'nin kendi ayar ve sır dosyalarını değiştiremez; .ssh/.aws gibi klasörlere yazma, başlangıç klasörleri ve yerel ağ adresleri her zaman onaya tabidir; ajanın değiştirdiği her dosyanın önceki hali saklanır ve sohbetten geri alınabilir.')));
+  // İzin modu ve düşünme modu mesaj kutusunun altından seçilir; burada tekrarlanmaz.
   body.append(h('div', { class: 'section' },
     h('div', { class: 'sh' }, h('h3', {}, 'Davranış')),
     field('Kabuk', 'Ajanın ve terminalin kullandığı kabuk', select(a.shell, [['auto', 'Otomatik (Windows\'ta Git Bash)'], ['bash', 'bash'], ['powershell', 'PowerShell'], ['cmd', 'cmd.exe'], ['zsh', 'zsh'], ['sh', 'sh']], (v) => saveSettings({ agent: { shell: v } }))),
     field('En fazla adım', 'Bir görevde en fazla araç turu', select(a.max_steps, [[30, '30'], [60, '60'], [100, '100'], [200, '200'], [400, '400']], (v) => saveSettings({ agent: { max_steps: Number(v) } }))),
     field('Sıcaklık', 'Düşük: tutarlı, yüksek: yaratıcı', select(a.temperature, [[0.2, '0,2'], [0.4, '0,4'], [0.6, '0,6'], [0.8, '0,8'], [1.0, '1,0']], (v) => saveSettings({ agent: { temperature: Number(v) } }))),
-    field('Düşünme modu', 'Destekleyen modellerde (Qwen3, GLM…) önce düşünür', check(a.thinking, (v) => saveSettings({ agent: { thinking: v } }), 'Etkin')),
     field('Komut zaman aşımı', null, select(a.command_timeout_secs, [[60, '1 dk'], [300, '5 dk'], [900, '15 dk'], [1800, '30 dk']], (v) => saveSettings({ agent: { command_timeout_secs: Number(v) } }))),
     field('Araç çıktısı sınırı', 'Modele verilen en fazla karakter', select(a.max_tool_output_chars, [[8000, '8 bin'], [16000, '16 bin'], [32000, '32 bin'], [64000, '64 bin']], (v) => saveSettings({ agent: { max_tool_output_chars: Number(v) } })))));
   body.append(h('div', { class: 'section' }, h('div', { class: 'sh' }, h('h3', {}, 'Proje talimatları')),

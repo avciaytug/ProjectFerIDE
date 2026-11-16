@@ -1,5 +1,11 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.23) — Ayarlar'da tekrar eden seçimler kaldırıldı
+
+- Ayarlar → Ajan ve güvenlik'ten **İzin modu** bölümü ve **Düşünme modu** satırı kaldırıldı. İkisi de zaten mesaj
+  kutusunun altında: izin modu seçicisi ve "Düşünme" anahtarı.
+- Her modun açıklaması ve her modda geçerli korumalar artık izin modu seçicisinin üzerine gelince görünüyor.
+
 ## beta v5.4 (5.4.0-beta.22) — Görsel adaptör (mmproj) bir kez iniyor
 
 - **Aynı modelin farklı sürümleri artık tek görsel adaptörü paylaşıyor.** Önceden Q4_K, Q8_0 gibi her kuantizasyon
