@@ -132,6 +132,13 @@ pub fn suppress_error_dialogs() {
     }
 }
 
+/// Bir program başlatılamadıysa nedeni Windows Uygulama Denetimi / Akıllı Uygulama Denetimi mi? (Ör. 4551
+/// `ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION`: "Uygulama Denetimi ilkesi bu dosyayı engelledi"; 4556–4559 ve
+/// 4580–4582: itibar denetimi.)
+pub fn is_policy_block(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(4551 | 4556..=4559 | 4580..=4582))
+}
+
 /// Windows Güvenlik'te "Uygulama ve tarayıcı denetimi" sayfasını açar.
 pub fn open_security_settings() -> anyhow::Result<()> {
     #[cfg(windows)]

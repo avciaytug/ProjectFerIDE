@@ -1,5 +1,19 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.19) — Ctrl+T, isteğe bağlı güncelleme, Windows engelleri
+
+- **Terminal kısayolu artık Ctrl+T** (Türkçe klavyede ters tırnak AltGr istiyordu). Terminal odaktayken de paneli
+  açıp kapatır; eski Ctrl+` da çalışmaya devam eder.
+- **"Yeni sürümleri otomatik indir ve kur" kapalıyken hiçbir şey indirilmez.** Önceden "Şimdi denetle" kutuya bakmadan
+  indirip kuruyordu. Artık yalnızca bakar; yeni sürüm varsa durum çubuğunda "Yeni sürüm …", Ayarlar'da
+  **İndir ve kur** düğmesi çıkar.
+- **Windows Akıllı Uygulama Denetimi yeni sürümü engellerse** ham hata ("os error 4551") yerine anlaşılır bir açıklama,
+  **Yeniden dene** ve **Windows Güvenlik'i aç** düğmeleri gösterilir. Çalışan sürüm korunur. Otomatik güncelleme
+  aynı sürümü 3 gün boyunca yeniden indirmez; önceden her denemede ~9 MB inip yeni bir Windows bildirimi açılıyordu.
+- Windows "Yüklü uygulamalar" listesindeki FerIDE sürümü güncellemeden sonra artık yenileniyor. Kayıt PowerShell
+  betiğiyle yazılıyordu ve masaüstü uygulamasından çağrılınca sessizce başarısız oluyordu (listede beta.15 kalmıştı).
+  Artık doğrudan Windows API'siyle yazılıyor.
+
 ## beta v5.4 (5.4.0-beta.18) — Küçük ekran kartları ve Windows Akıllı Uygulama Denetimi
 
 - **6 GB ekran kartında 4 GB'lık model artık tamamen GPU'da çalışıyor.** Örnek: Gemma 4 12B UD-IQ2_M, 32K bağlam,

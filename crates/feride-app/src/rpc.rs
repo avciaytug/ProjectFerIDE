@@ -98,9 +98,17 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
         }
         // ------------------------------------------------------------ güncelleme
         "update.status" => serde_json::to_value(core.updater.status())?,
+        // "Şimdi denetle": otomatik güncelleme kapalıysa yalnızca denetler, hiçbir şey indirmez.
         "update.check" => {
             let c = Arc::clone(core);
-            tokio::spawn(async move { c.updater.run_once().await });
+            let mode = core.update_mode();
+            tokio::spawn(async move { c.updater.run(mode).await });
+            serde_json::to_value(core.updater.status())?
+        }
+        // "İndir ve kur" / "Yeniden dene": kullanıcının açık isteği.
+        "update.install" => {
+            let c = Arc::clone(core);
+            tokio::spawn(async move { c.updater.run(feride_core::update::UpdateMode::Install).await });
             serde_json::to_value(core.updater.status())?
         }
         "update.restart" => {

@@ -105,7 +105,11 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
   sonra 6 saatte bir). Yeni sürümü arka planda indirir, SHA-256 ile doğrular, bu bilgisayarda çalıştığını sınar ve
   kurar; çalışmanız kesilmez. Durum çubuğunda **Güncelleme hazır** belirince tıklayıp yeniden başlatın (yüklü model
   yeni sürümde yeniden yüklenir) ya da FerIDE'yi bir sonraki açışınızda yeni sürüm gelir. Ayarlar → Genel →
-  **Güncellemeler**'den kapatılabilir ve elle denetlenebilir; komut satırından `feride update`.
+  **Güncellemeler**'den kapatılabilir. Kapalıyken FerIDE yalnızca yeni sürüm olup olmadığına bakar (durum çubuğunda
+  "Yeni sürüm …"); siz **İndir ve kur**'a basmadan hiçbir şey indirilmez. Komut satırından `feride update`.
+- **Windows Akıllı Uygulama Denetimi yeni sürümü engellerse:** FerIDE henüz dijital olarak imzalı olmadığından Windows
+  yeni bir sürümü tanımayıp engelleyebilir. Çalışan sürüm korunur, Ayarlar'da nedeni ve **Yeniden dene** düğmesi
+  görünür; otomatik güncelleme aynı sürümü 3 gün boyunca yeniden indirmez.
 - **Elle güncelleme:** kurulum komutunu yeniden çalıştırın; FerIDE bulunduğu yerde güncellenir, ayarlar, modeller ve
   sohbetler korunur.
 - **Kaldırma** (üç yoldan biri):

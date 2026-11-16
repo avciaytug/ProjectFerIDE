@@ -25,6 +25,32 @@ pub const REPO: &str = "avciaytug/ProjectFerIDE";
 pub const FIRST_CHECK: Duration = Duration::from_secs(60);
 /// Sonraki denetimlerin aralığı.
 pub const INTERVAL: Duration = Duration::from_secs(6 * 3600);
+/// Windows'un engellediği bir sürüm otomatik güncellemede bu kadar süre yeniden indirilmez (her deneme ~9 MB indirir
+/// ve Windows yeni bir "engellendi" bildirimi gösterir). Kullanıcı "Yeniden dene"ye basarsa hemen denenir.
+pub const BLOCKED_RETRY: Duration = Duration::from_secs(3 * 24 * 3600);
+
+/// Bir denetimin ne yapacağı.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateMode {
+    /// Otomatik güncelleme kapalı: yalnızca denetler; yeni sürüm varsa durum "available" olur, hiçbir şey indirilmez.
+    Check,
+    /// Otomatik güncelleme açık: yeni sürümü indirip kurar (Windows'un yakın zamanda engellediği sürüm hariç).
+    Auto,
+    /// Kullanıcı "İndir ve kur"a bastı ya da `feride update` çalıştırdı: her durumda dener.
+    Install,
+}
+
+/// Yeni sürüm Windows Uygulama Denetimi / Akıllı Uygulama Denetimi tarafından engellendi.
+#[derive(Debug)]
+struct BlockedByWindows;
+
+impl std::fmt::Display for BlockedByWindows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Windows Akıllı Uygulama Denetimi yeni sürümü engelledi")
+    }
+}
+
+impl std::error::Error for BlockedByWindows {}
 
 // ------------------------------------------------------------------ sürüm karşılaştırma
 
@@ -272,10 +298,20 @@ async fn download(http: &reqwest::Client, url: &str, dest: &Path, mut progress: 
 
 // ------------------------------------------------------------------ güncelleyici
 
+/// Windows yeni sürümü engellediğinde gösterilen açıklama.
+fn blocked_message(version: &str) -> String {
+    format!(
+        "FerIDE {version} kurulamadı: Windows Akıllı Uygulama Denetimi yeni sürümü engelledi (program henüz dijital olarak \
+         imzalı değil ve Windows bu sürümü henüz tanımıyor). Çalışan sürüm olduğu gibi korunuyor; otomatik güncelleme bu \
+         sürümü 3 gün boyunca yeniden denemez. Bu bilgisayarda hemen güncellemek için Windows Güvenlik → Uygulama ve \
+         tarayıcı denetimi → Akıllı Uygulama Denetimi ayarları → Kapalı yapıp \"Yeniden dene\"ye basın."
+    )
+}
+
 /// Arayüze bildirilen güncelleme durumu.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct UpdateStatus {
-    /// idle | checking | downloading | installing | ready | up_to_date | error | unsupported
+    /// idle | checking | available | downloading | installing | ready | up_to_date | blocked | error | unsupported
     pub state: String,
     /// Çalışan sürüm.
     pub current: String,
@@ -351,8 +387,28 @@ impl Updater {
         Ok(pick(&releases, asset))
     }
 
-    /// Denetler; daha yeni bir sürüm varsa indirip kurar. Başka bir denetim sürüyorsa hemen döner.
+    /// `feride update` için: denetler, daha yeni bir sürüm varsa indirip kurar.
     pub async fn run_once(&self) {
+        self.run(UpdateMode::Install).await
+    }
+
+    fn blocked_file(&self) -> PathBuf {
+        self.paths.cache().join("update-blocked.txt")
+    }
+
+    /// Windows'un son [`BLOCKED_RETRY`] içinde engellediği sürüm.
+    fn recently_blocked(&self) -> Option<String> {
+        let f = self.blocked_file();
+        let age = std::fs::metadata(&f).ok()?.modified().ok()?.elapsed().ok()?;
+        if age > BLOCKED_RETRY {
+            return None;
+        }
+        std::fs::read_to_string(f).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    }
+
+    /// Denetler; `mode`'a göre yeni sürümü yalnızca bildirir ya da indirip kurar. Başka bir denetim sürüyorsa hemen
+    /// döner.
+    pub async fn run(&self, mode: UpdateMode) {
         let Ok(_guard) = self.busy.try_lock() else { return };
         let dir = match install_dir() {
             Ok(d) => d,
@@ -388,22 +444,53 @@ impl Updater {
         let installed = self.status().ready_version.unwrap_or_else(current_version);
         match cand {
             Some(c) if is_newer(&c.version, &installed) => {
-                self.set(|s| {
-                    s.state = "downloading".into();
+                let describe = |s: &mut UpdateStatus| {
                     s.latest = Some(c.version.clone());
                     s.page_url = Some(c.page_url.clone());
                     s.notes = Some(c.notes.clone()).filter(|n| !n.is_empty());
+                    s.checked_at = Some(crate::util::now_iso());
+                };
+                let blocked = self.recently_blocked().as_deref() == Some(c.version.as_str());
+                // Otomatik güncelleme kapalıysa hiçbir şey indirilmez; Windows'un engellediği sürüm de kendiliğinden
+                // yeniden indirilmez.
+                if mode == UpdateMode::Check || (mode == UpdateMode::Auto && blocked) {
+                    self.set(|s| {
+                        describe(s);
+                        if s.ready_version.is_some() {
+                            s.state = "ready".into();
+                        } else if blocked {
+                            s.state = "blocked".into();
+                            s.message = Some(blocked_message(&c.version));
+                        } else {
+                            s.state = "available".into();
+                            s.message = None;
+                        }
+                    });
+                    return;
+                }
+                self.set(|s| {
+                    describe(s);
+                    s.state = "downloading".into();
                     s.done = 0;
                     s.total = c.size;
-                    s.checked_at = Some(crate::util::now_iso());
                 });
                 match self.install(&dir, &c).await {
                     Ok(()) => {
                         tracing::info!("FerIDE {} kuruldu; yeniden başlatınca geçerli olacak", c.version);
+                        let _ = std::fs::remove_file(self.blocked_file());
                         self.set(|s| {
                             s.state = "ready".into();
                             s.ready_version = Some(c.version.clone());
                             s.message = None;
+                        });
+                    }
+                    Err(e) if e.downcast_ref::<BlockedByWindows>().is_some() => {
+                        tracing::warn!("FerIDE {} Windows Akıllı Uygulama Denetimi tarafından engellendi", c.version);
+                        let _ = std::fs::create_dir_all(self.paths.cache());
+                        let _ = std::fs::write(self.blocked_file(), &c.version);
+                        self.set(|s| {
+                            s.state = if s.ready_version.is_some() { "ready" } else { "blocked" }.into();
+                            s.message = Some(blocked_message(&c.version));
                         });
                     }
                     Err(e) => {
@@ -475,9 +562,19 @@ impl Updater {
         //    Denetimi…) Çalışmıyorsa mevcut program olduğu gibi kalır.
         let mut cmd = crate::proc::command(&self.paths, &staged.to_string_lossy(), &["--version".to_string()]);
         let probe = crate::proc::run_capture(&mut cmd, Duration::from_secs(30)).await;
-        let ok = matches!(&probe, Ok((Some(0), out, err, false)) if format!("{out}{err}").contains(&c.version));
+        // Test için: FERIDE_UPDATE_SIMULATE_BLOCK=1 Windows engellemiş gibi davranır.
+        let simulate_block = std::env::var_os("FERIDE_UPDATE_SIMULATE_BLOCK").is_some();
+        let ok = !simulate_block && matches!(&probe, Ok((Some(0), out, err, false)) if format!("{out}{err}").contains(&c.version));
         if !ok {
             let _ = std::fs::remove_file(&staged);
+            let blocked = simulate_block
+                || match &probe {
+                    Err(e) => crate::winsec::is_policy_block(e),
+                    Ok((code, ..)) => crate::winsec::blocked_exit(*code),
+                };
+            if blocked {
+                return Err(BlockedByWindows.into());
+            }
             let detail = match probe {
                 Ok((code, out, err, timed_out)) => format!(
                     "çıkış {code:?}{}{}",
@@ -623,5 +720,14 @@ mod tests {
         assert_eq!(std::fs::read(&old).unwrap(), b"eski");
         assert!(!new.exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn windows_block_is_recognised() {
+        // Kullanıcının ekranındaki hata: "Uygulama Denetimi ilkesi bu dosyayı engelledi. (os error 4551)".
+        assert!(crate::winsec::is_policy_block(&std::io::Error::from_raw_os_error(4551)));
+        assert!(!crate::winsec::is_policy_block(&std::io::Error::from_raw_os_error(2)));
+        let m = blocked_message("5.4.0-beta.19");
+        assert!(m.contains("5.4.0-beta.19") && m.contains("Akıllı Uygulama Denetimi") && m.contains("Yeniden dene"));
     }
 }

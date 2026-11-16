@@ -43,24 +43,30 @@ function renderUpdate(sec) {
   const text = {
     idle: 'Henüz denetlenmedi.',
     checking: 'Denetleniyor…',
-    downloading: `FerIDE ${u.latest} arka planda indiriliyor…${pct}`,
+    available: `FerIDE ${u.latest} yayında. Otomatik güncelleme kapalı olduğu için indirilmedi.`,
+    downloading: `FerIDE ${u.latest} indiriliyor…${pct}`,
     installing: `FerIDE ${u.latest} doğrulanıp kuruluyor…`,
     ready: `FerIDE ${u.ready_version} kuruldu; yeniden başlatınca geçerli olur.`,
     up_to_date: `Güncel${u.latest ? ` (GitHub'daki en yeni sürüm ${u.latest})` : ''}.`,
+    blocked: u.message || 'Windows yeni sürümü engelledi.',
     error: u.message || 'Denetlenemedi.',
     unsupported: u.message || 'Bu kopya kendini güncelleyemiyor.',
   }[u.state] || '';
   const busy = ['checking', 'downloading', 'installing'].includes(u.state);
+  const install = () => S.rpc.call('update.install').catch((e) => toast(e.message, 'err'));
   sec.innerHTML = '';
   sec.append(
     h('div', { class: 'sh' }, h('h3', {}, 'Güncellemeler')),
-    field('Otomatik güncelleme', 'FerIDE açıkken GitHub\'daki yeni sürümleri denetler (açılıştan 1 dakika sonra, sonra 6 saatte bir), yeni sürümü arka planda indirip doğrular ve kurar. Yeni sürüm FerIDE yeniden başlatılınca devreye girer.',
+    field('Otomatik güncelleme', 'Açıkken FerIDE, GitHub\'daki yeni sürümleri denetler (açılıştan 1 dakika sonra, sonra 6 saatte bir), arka planda indirip doğrular ve kurar; yeni sürüm yeniden başlatınca devreye girer. Kapalıyken yalnızca yeni sürüm olup olmadığına bakılır, siz "İndir ve kur"a basmadan hiçbir şey indirilmez.',
       u.updatable === false ? h('span', { class: 'small muted' }, 'Bu kopyada kullanılamaz') : check(S.settings.updates?.auto !== false, async (v) => { await saveSettings({ updates: { auto: v } }); if (v) S.rpc.call('update.check').catch(() => {}); }, 'Yeni sürümleri otomatik indir ve kur')),
     field('Durum', `Çalışan sürüm: ${u.current || S.info?.version || ''}${u.checked_at ? ` • son denetim ${relTime(u.checked_at)}` : ''}`,
       h('div', { class: 'row', style: { flexWrap: 'wrap', justifyContent: 'flex-end' } },
-        h('span', { class: 'small', style: { maxWidth: '440px', color: u.state === 'error' ? 'var(--err)' : u.state === 'ready' ? 'var(--accent)' : '' } }, busy ? icon('loader', 'spin') : null, ' ', text),
+        h('span', { class: 'small', style: { maxWidth: '440px', color: ['error', 'blocked'].includes(u.state) ? 'var(--err)' : ['ready', 'available'].includes(u.state) ? 'var(--accent)' : '' } }, busy ? icon('loader', 'spin') : null, ' ', text),
         u.state === 'ready' ? h('button', { class: 'btn sm primary', onclick: () => restartForUpdate() }, icon('refresh'), 'Yeniden başlat') : null,
-        u.updatable && !busy ? h('button', { class: 'btn sm', onclick: () => S.rpc.call('update.check').catch((e) => toast(e.message, 'err')) }, icon('refresh'), 'Şimdi denetle') : null,
+        u.state === 'available' ? h('button', { class: 'btn sm primary', onclick: install }, icon('download'), 'İndir ve kur') : null,
+        u.state === 'blocked' ? h('button', { class: 'btn sm', onclick: install }, icon('refresh'), 'Yeniden dene') : null,
+        u.state === 'blocked' ? h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_security').catch((e) => toast(e.message, 'err')) }, icon('external'), 'Windows Güvenlik\'i aç') : null,
+        u.updatable && !busy && u.state !== 'blocked' ? h('button', { class: 'btn sm', onclick: () => S.rpc.call('update.check').catch((e) => toast(e.message, 'err')) }, icon('refresh'), 'Şimdi denetle') : null,
         u.page_url ? h('button', { class: 'btn sm ghost', onclick: () => S.rpc.call('app.open_url', { url: u.page_url }) }, 'Sürüm notları') : null)));
 }
 

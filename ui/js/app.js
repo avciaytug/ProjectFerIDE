@@ -125,6 +125,9 @@ export function renderStatusbar() {
   const up = S.update;
   if (up?.state === 'ready') {
     sb.append(h('span', { class: 'item click', style: { color: 'var(--accent)' }, title: `FerIDE ${up.ready_version} kuruldu — yeniden başlatmak için tıklayın`, onclick: () => restartForUpdate() }, icon('refresh'), 'Güncelleme hazır'));
+  } else if (up?.state === 'available' && up.latest) {
+    // Otomatik güncelleme kapalı: yalnızca haber ver, indirmeyi kullanıcı başlatır.
+    sb.append(h('span', { class: 'item click', title: `FerIDE ${up.latest} yayında — indirip kurmak için tıklayın`, onclick: () => Settings.open('general') }, icon('download'), `Yeni sürüm ${up.latest}`));
   } else if ((up?.state === 'downloading' || up?.state === 'installing') && up.latest) {
     const pct = up.total ? ` %${Math.floor((up.done * 100) / up.total)}` : '';
     sb.append(h('span', { class: 'item', title: `FerIDE ${up.latest} arka planda indiriliyor` }, icon('download'), up.state === 'installing' ? 'Güncelleme kuruluyor' : `Güncelleme${pct}`));
@@ -232,7 +235,8 @@ function setupShortcuts() {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); Editor.saveActive(); }
     else if (mod && e.key.toLowerCase() === 'j') { e.preventDefault(); toggleFocus(); }
-    else if (mod && e.key === '`') { e.preventDefault(); Bottom.toggle(); }
+    // Ctrl+T: Türkçe klavyede ters tırnak (`) AltGr ister; eski Ctrl+` de çalışmaya devam eder.
+    else if (mod && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === 't' || e.key === '`')) { e.preventDefault(); Bottom.toggle(); }
     else if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); Chat.focusComposer(); }
     else if (mod && e.key.toLowerCase() === 'n' && e.shiftKey) { e.preventDefault(); Chat.newChat(); }
     else if (mod && e.key.toLowerCase() === 'v' && e.shiftKey) { e.preventDefault(); import('./views/live.js').then((l) => (l.isActive() ? l.close() : l.open())); }

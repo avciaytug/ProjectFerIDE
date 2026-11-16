@@ -120,8 +120,55 @@ pub fn after_update() {
         return;
     }
     let _ = write_json(&pointer_file(), &info);
-    let only_register = InstallInfo { desktop_shortcut: false, menu_shortcut: false, add_path: false, ..info };
-    let _ = integrate(&only_register, &dir.join(exe_name()), true);
+    // Windows "Yüklü uygulamalar" kaydındaki sürüm. (Eskiden PowerShell betiğiyle yazılıyordu; masaüstü uygulamasından
+    // çağrılınca sessizce başarısız oluyor ve listede eski sürüm kalıyordu.)
+    #[cfg(windows)]
+    if let Err(e) = write_uninstall_entry(UNINSTALL_KEY, &info, &dir.join(exe_name())) {
+        tracing::warn!("Windows kaldırma kaydı güncellenemedi: {e}");
+    }
+}
+
+/// Windows "Yüklü uygulamalar" kaydının yeri (HKCU, yönetici izni gerekmez).
+#[cfg(windows)]
+const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\FerIDE";
+
+/// Kaldırma kaydının değerlerini PowerShell çalıştırmadan, doğrudan Windows API'siyle yazar (anahtar yoksa oluşturulur;
+/// kurulum tarihi korunur).
+#[cfg(windows)]
+fn write_uninstall_entry(key: &str, info: &InstallInfo, exe: &Path) -> std::io::Result<()> {
+    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD, REG_SZ};
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let key_w = wide(key);
+    let set = |name: &str, kind: u32, data: &[u8]| -> std::io::Result<()> {
+        let name_w = wide(name);
+        // SAFETY: anahtar/değer adları sıfırla biten UTF-16; veri arabelleği ve boyutu birlikte verilir.
+        let rc = unsafe {
+            RegSetKeyValueW(HKEY_CURRENT_USER, key_w.as_ptr(), name_w.as_ptr(), kind, data.as_ptr().cast(), data.len() as u32)
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::from_raw_os_error(rc as i32))
+        }
+    };
+    let text = |name: &str, value: &str| -> std::io::Result<()> {
+        let bytes: Vec<u8> = wide(value).iter().flat_map(|u| u.to_le_bytes()).collect();
+        set(name, REG_SZ, &bytes)
+    };
+    let dword = |name: &str, value: u32| set(name, REG_DWORD, &value.to_le_bytes());
+    let exe_s = exe.to_string_lossy();
+    text("DisplayName", "FerIDE")?;
+    text("DisplayVersion", &info.version)?;
+    text("Publisher", "ProjectFerIDE")?;
+    text("DisplayIcon", &format!("{exe_s},0"))?;
+    text("InstallLocation", &info.install_dir.to_string_lossy())?;
+    text("UninstallString", &format!("\"{exe_s}\" uninstall"))?;
+    text("QuietUninstallString", &format!("\"{exe_s}\" uninstall --yes"))?;
+    text("URLInfoAbout", "https://github.com/avciaytug/ProjectFerIDE")?;
+    dword("NoModify", 1)?;
+    dword("NoRepair", 1)?;
+    dword("EstimatedSize", (std::fs::metadata(exe).map(|m| m.len() / 1024).unwrap_or(0)).min(u32::MAX as u64) as u32)?;
+    Ok(())
 }
 
 /// Çalışan programın bulunduğu klasör (Windows'ta `\\?\` öneki olmadan).
@@ -919,6 +966,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// Kaldırma kaydı PowerShell'siz yazılır. Gerçek kayda değil, test için açılan ayrı bir anahtara yazar ve siler.
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_entry_native() {
+        use windows_sys::Win32::System::Registry::{RegDeleteTreeW, RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let key = format!(r"Software\FerIDE-test-uninstall-{}", std::process::id());
+        let dir = tmp("reg");
+        let exe = dir.join(exe_name());
+        std::fs::write(&exe, vec![0u8; 4096]).unwrap();
+        let info = InstallInfo {
+            version: "5.4.0-beta.99".into(),
+            install_dir: dir.clone(),
+            data_dir: dir.clone(),
+            desktop_shortcut: false,
+            menu_shortcut: false,
+            add_path: false,
+            installed_at: String::new(),
+        };
+        write_uninstall_entry(&key, &info, &exe).unwrap();
+        let read = |name: &str| -> String {
+            let mut buf = [0u16; 512];
+            let mut size = (buf.len() * 2) as u32;
+            let (k, n) = (wide(&key), wide(name));
+            // SAFETY: arabellek ve boyutu birlikte verilir; yalnızca okuma.
+            let rc = unsafe {
+                RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), n.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size)
+            };
+            assert_eq!(rc, 0, "{name} okunamadı");
+            String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)])
+        };
+        assert_eq!(read("DisplayVersion"), "5.4.0-beta.99");
+        assert!(read("QuietUninstallString").ends_with("\" uninstall --yes"));
+        // İkinci yazım (sonraki güncelleme) sürümü değiştirir.
+        write_uninstall_entry(&key, &InstallInfo { version: "5.4.0-beta.100".into(), ..info }, &exe).unwrap();
+        assert_eq!(read("DisplayVersion"), "5.4.0-beta.100");
+        let k = wide(&key);
+        // SAFETY: yalnızca bu testin oluşturduğu anahtar silinir.
+        unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, k.as_ptr()) };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

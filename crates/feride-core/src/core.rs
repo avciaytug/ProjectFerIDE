@@ -103,14 +103,13 @@ impl Core {
                 });
             }
         }
-        // Otomatik güncelleme: açılıştan bir dakika sonra, sonra altı saatte bir.
+        // Güncelleme denetimi: açılıştan bir dakika sonra, sonra altı saatte bir. Otomatik güncelleme kapalıysa yalnızca
+        // yeni sürüm olup olmadığına bakılır; hiçbir şey indirilmez.
         let me = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(crate::update::FIRST_CHECK).await;
             loop {
-                if me.settings().updates.auto {
-                    me.updater.run_once().await;
-                }
+                me.updater.run(me.update_mode()).await;
                 tokio::time::sleep(crate::update::INTERVAL).await;
             }
         });
@@ -118,6 +117,15 @@ impl Core {
 
     pub fn settings(&self) -> Settings {
         self.settings.read().unwrap().clone()
+    }
+
+    /// Ayarlardaki "Yeni sürümleri otomatik indir ve kur" kutusuna göre denetim kipi.
+    pub fn update_mode(&self) -> crate::update::UpdateMode {
+        if self.settings().updates.auto {
+            crate::update::UpdateMode::Auto
+        } else {
+            crate::update::UpdateMode::Check
+        }
     }
 
     pub fn update_settings(&self, patch: &serde_json::Value) -> anyhow::Result<Settings> {

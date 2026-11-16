@@ -114,6 +114,8 @@ export async function openTerminal(cwd) {
     id = await S.rpc.call('term.open', { cwd: cwd || S.info?.workspace, cols: 100, rows: 24 });
   } catch (e) { toast(`Terminal açılamadı: ${e.message}`, 'err'); return; }
   const t = { id, title: basename(cwd || S.info?.workspace || '') || 'terminal', term, fit: fitAddon, el };
+  // Ctrl+T terminal odaktayken de paneli açıp kapatsın: xterm bu tuşu kabuğa göndermesin, uygulamaya bıraksın.
+  term.attachCustomKeyEventHandler((e) => !((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === 't' || e.key === '`')));
   term.onData((d) => S.rpc.call('term.write', { id, data: d }).catch(() => {}));
   term.onResize(({ cols, rows }) => S.rpc.call('term.resize', { id, cols, rows }).catch(() => {}));
   terms.push(t);
