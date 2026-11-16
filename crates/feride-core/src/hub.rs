@@ -175,15 +175,18 @@ impl Hub {
         self.events.emit_ser("download.progress", info);
     }
 
-    /// İndirmeyi arka planda başlatır. `mmproj_for`: görsel adaptörü hangi modele ait.
+    /// İndirmeyi arka planda başlatır. `mmproj_for`: görsel adaptörü hangi modele ait; `expected_size`: dosyanın
+    /// Hugging Face'teki boyutu (biliniyorsa). Görsel adaptörü bu bilgisayarda zaten varsa (aynı modelin başka bir
+    /// sürümü için indirilmişse) yeniden indirilmez: indirme hemen "bitti" olur ve ikinci değer `true` döner.
     pub fn start_download(
         self: &Arc<Self>,
         repo: &str,
         file: &str,
         parts: Vec<String>,
         mmproj_for: Option<String>,
+        expected_size: Option<u64>,
         token: Option<String>,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<(String, bool)> {
         validate_repo(repo)?;
         let files: Vec<String> = if parts.is_empty() { vec![file.to_string()] } else { parts };
         for f in &files {
@@ -194,8 +197,28 @@ impl Hub {
         let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
         let first_name = Path::new(file).file_name().unwrap().to_string_lossy().to_string();
         let dest_dir = if mmproj_for.is_some() { self.paths.models().join("mmproj") } else { self.paths.models() };
-        let dest_name = match &mmproj_for {
-            Some(model) => format!("{}__{}", crate::gguf::base_name(Path::new(model)), first_name),
+        let family = mmproj_for.as_deref().map(|m| mmproj_family(repo, m));
+        if let Some(fam) = &family {
+            if let Some(existing) = existing_adapter(&dest_dir, fam, &first_name, expected_size) {
+                let size = std::fs::metadata(&existing).map(|m| m.len()).unwrap_or(0);
+                let info = DownloadInfo {
+                    id: id.clone(),
+                    repo: repo.to_string(),
+                    file: file.to_string(),
+                    dest: existing,
+                    done: size,
+                    total: size,
+                    speed: 0.0,
+                    state: "done".into(),
+                    error: None,
+                };
+                self.downloads.lock().unwrap().insert(id.clone(), (info.clone(), CancellationToken::new()));
+                self.events.emit_ser("download.progress", &info);
+                return Ok((id, true));
+            }
+        }
+        let dest_name = match &family {
+            Some(fam) => format!("{fam}__{first_name}"),
             None => first_name.clone(),
         };
         let info = DownloadInfo {
@@ -232,7 +255,7 @@ impl Hub {
                 me.events.emit("models.changed", json!({}));
             }
         });
-        Ok(id)
+        Ok((id, false))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -411,6 +434,48 @@ fn validate_repo(repo: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Görsel adaptörün (mmproj) kaydedileceği aile adı. Bir depodaki bütün kuantizasyonlar (Q4_K, Q8_0…) aynı adaptörü
+/// kullanır; ad modelin değil ailenin adıyla verilir ki sürümler onu paylaşsın: depo adı ile model adının ortak başı
+/// ("…/Huihui-Qwen3.8-27B-abliterated-GGUF" + "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf" →
+/// "Huihui-Qwen3.8-27B-abliterated"). Ortak baş çok kısaysa modelin adı kullanılır. Model başlatılırken adaptör ad
+/// ön ekiyle eşleştirildiğinden (`llama::find_mmproj`) ailenin bütün sürümleri onu bulur.
+pub fn mmproj_family(repo: &str, model_file: &str) -> String {
+    let model = crate::gguf::base_name(Path::new(model_file));
+    let repo_name = repo.rsplit('/').next().unwrap_or(repo);
+    let lower = repo_name.to_lowercase();
+    let repo_name = ["-gguf", "_gguf", ".gguf"]
+        .iter()
+        .find(|s| lower.ends_with(*s))
+        .map(|s| &repo_name[..repo_name.len() - s.len()])
+        .unwrap_or(repo_name);
+    let common = model.chars().zip(repo_name.chars()).take_while(|(a, b)| a.eq_ignore_ascii_case(b)).count();
+    let family: String = model.chars().take(common).collect::<String>().trim_end_matches(['-', '_', '.', ' ']).to_string();
+    if family.chars().count() >= 6 {
+        family
+    } else {
+        model
+    }
+}
+
+/// Bu aileye ait aynı adaptör dosyası zaten indirilmiş mi? Eski sürümler adaptörü her kuantizasyon için ayrı adla
+/// (`<model-Q4_K>__mmproj-….gguf`) kaydediyordu; onlar da sayılır. Boyut biliniyorsa aynı olmalı.
+fn existing_adapter(dir: &Path, family: &str, file_name: &str, expected_size: Option<u64>) -> Option<PathBuf> {
+    let suffix = format!("__{}", file_name.to_lowercase());
+    let fam = family.to_lowercase();
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_lowercase();
+            n.ends_with(&suffix) && n.starts_with(&fam) && e.path().is_file()
+        })
+        .filter(|e| expected_size.is_none_or(|s| e.metadata().is_ok_and(|m| m.len() == s)))
+        .map(|e| e.path())
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
 /// Diskteki boş alan (bayt).
 pub fn free_space(dir: &Path) -> Option<u64> {
     let disks = sysinfo::Disks::new_with_refreshed_list();
@@ -433,5 +498,53 @@ mod tests {
         assert!(validate_repo("../etc").is_err());
         assert!(validate_repo("a/b/c").is_err());
         assert!(validate_repo("a/b?x=1").is_err());
+    }
+
+    #[test]
+    fn adapter_family_names() {
+        let f = |repo, model| mmproj_family(repo, model);
+        assert_eq!(f("huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF", "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf"), "Huihui-Qwen3.8-27B-abliterated");
+        assert_eq!(f("huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF", "Huihui-Qwen3.8-27B-abliterated-Q8_0_L.gguf"), "Huihui-Qwen3.8-27B-abliterated");
+        assert_eq!(f("unsloth/gemma-4-12b-it-GGUF", "gemma-4-12b-it-UD-IQ2_M.gguf"), "gemma-4-12b-it");
+        assert_eq!(f("bartowski/Qwen_Qwen3-8B-GGUF", "Qwen_Qwen3-8B-Q4_K_M.gguf"), "Qwen_Qwen3-8B");
+        // Bölünmüş model: parça eki atılır.
+        assert_eq!(f("x/GLM-4.5-Air-GGUF", "GLM-4.5-Air-Q4_K_S-00001-of-00002.gguf"), "GLM-4.5-Air");
+        // Depo adı modelle hiç uyuşmuyorsa modelin kendi adı.
+        assert_eq!(f("someone/vision-pack", "Mistral-7B-Q4_K_M.gguf"), "Mistral-7B-Q4_K_M");
+        // Bu bilgisayarda iki kez inen adaptör artık ikisi için de aynı adı alır.
+        assert_eq!(
+            format!("{}__mmproj-model-bf16.gguf", f("huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF", "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf")),
+            "Huihui-Qwen3.8-27B-abliterated__mmproj-model-bf16.gguf"
+        );
+    }
+
+    #[test]
+    fn existing_adapter_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        // Eski adlandırmayla (sürüme göre) indirilmiş adaptör.
+        std::fs::write(dir.path().join("Huihui-Qwen3.8-27B-abliterated-Q8_0_L__mmproj-model-bf16.gguf"), vec![0u8; 100]).unwrap();
+        let fam = "Huihui-Qwen3.8-27B-abliterated";
+        assert!(existing_adapter(dir.path(), fam, "mmproj-model-bf16.gguf", Some(100)).is_some());
+        assert!(existing_adapter(dir.path(), fam, "MMPROJ-model-BF16.gguf", None).is_some(), "büyük/küçük harf fark etmez");
+        assert!(existing_adapter(dir.path(), fam, "mmproj-model-bf16.gguf", Some(999)).is_none(), "boyut farklıysa başka dosyadır");
+        assert!(existing_adapter(dir.path(), fam, "mmproj-model-f16.gguf", None).is_none(), "başka adaptör");
+        assert!(existing_adapter(dir.path(), "Qwen3.8-27B", "mmproj-model-bf16.gguf", None).is_none(), "başka aile");
+        // Yeni (aile) adıyla kaydedilmiş adaptör de bulunur.
+        std::fs::write(dir.path().join("gemma-4-12b-it__mmproj-F16.gguf"), b"x").unwrap();
+        assert!(existing_adapter(dir.path(), "gemma-4-12b-it", "mmproj-F16.gguf", Some(1)).is_some());
+    }
+
+    /// Aile adıyla kaydedilen adaptör, model başlatılırken ailenin her sürümüyle eşleşir.
+    #[test]
+    fn family_named_adapter_matches_every_quant() {
+        let dir = tempfile::tempdir().unwrap();
+        let mm = dir.path().join("mmproj");
+        std::fs::create_dir_all(&mm).unwrap();
+        std::fs::write(mm.join("Huihui-Qwen3.8-27B-abliterated__mmproj-model-bf16.gguf"), b"x").unwrap();
+        let dirs = vec![dir.path().to_path_buf()];
+        for q in ["Q4_K", "Q8_0_L", "UD-Q8_K_XL"] {
+            let model = dir.path().join(format!("Huihui-Qwen3.8-27B-abliterated-{q}.gguf"));
+            assert!(crate::llama::find_mmproj(&model, &dirs).is_some(), "{q}");
+        }
     }
 }

@@ -317,16 +317,20 @@ function fillResults(box) {
       h('b', {}, hubState.repo),
       h('a', { href: '#', class: 'small', onclick: (e) => { e.preventDefault(); window.ferideOpenUrl(`https://huggingface.co/${hubState.repo}`); } }, 'sayfayı aç')));
     if (hubState.loading) { box.append(h('div', { class: 'status-line' }, icon('loader', 'spin'), 'Dosyalar alınıyor…')); return; }
-    const mmprojs = hubState.files.filter((f) => f.is_mmproj);
-    const withVision = h('input', { type: 'checkbox', checked: mmprojs.length > 0 });
-    if (mmprojs.length) box.append(h('label', { class: 'check small', style: { marginBottom: '8px' } }, withVision, `Görsel adaptörünü (${mmprojs[0].path}) de indir`));
+    const mm = pickMmproj(hubState.files);
+    // Seçim ayarlara kaydedilir: işareti kaldırırsanız sonraki indirmelerde (FerIDE yeniden açılsa da) kapalı gelir.
+    const withVision = h('input', { type: 'checkbox', checked: S.settings.model?.download_vision !== false, onchange: (e) => saveSettings({ model: { download_vision: e.target.checked } }).catch(() => {}) });
+    if (mm) {
+      box.append(h('label', { class: 'check small', style: { marginBottom: '8px' }, title: mm.path }, withVision,
+        `Görsel adaptörünü de indir (${fmtBytes(mm.size)}): model ekran görüntülerini ve resimleri anlayabilsin. İsteğe bağlı; bu modelin başka bir sürümü için indirildiyse yeniden inmez.`));
+    }
     const tbl = h('table', { class: 'tbl' }, h('tr', {}, h('th', {}, 'Dosya'), h('th', {}, 'Kuantizasyon'), h('th', {}, 'Boyut'), h('th')));
     for (const f of hubState.files.filter((x) => !x.is_mmproj)) {
       tbl.append(h('tr', {},
         h('td', { class: 'mono small' }, f.path, f.parts.length ? h('span', { class: 'badge', style: { marginLeft: '6px' } }, `${f.parts.length} parça`) : null),
         h('td', {}, f.quant ? h('span', { class: 'badge' }, f.quant) : ''),
         h('td', { class: 'nowrap' }, fmtBytes(f.total_size)),
-        h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn sm primary', onclick: () => download(f, withVision.checked ? mmprojs[0] : null) }, icon('download'), 'İndir'))));
+        h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn sm primary', onclick: () => download(f, mm && withVision.checked ? mm : null) }, icon('download'), 'İndir'))));
     }
     box.append(tbl);
     return;
@@ -374,11 +378,28 @@ async function openRepo(repo, box) {
   fillResults(box);
 }
 
+// Görsel adaptör (mmproj) çeşitlerinden en uygunu: F16 her GPU'da çalışır; sonra BF16, Q8; F32 (iki kat büyük) en son.
+function pickMmproj(files) {
+  const rank = (p) => {
+    const n = p.toLowerCase();
+    if (n.includes('f32')) return 9;
+    if (/(^|[^b])f16/.test(n)) return 0;
+    if (n.includes('bf16')) return 1;
+    if (n.includes('q8')) return 2;
+    return 5;
+  };
+  return files.filter((f) => f.is_mmproj).sort((a, b) => rank(a.path) - rank(b.path) || a.size - b.size)[0] || null;
+}
+
 async function download(f, mmproj) {
   try {
     await S.rpc.call('hub.download', { repo: hubState.repo, file: f.path, parts: f.parts });
-    if (mmproj) await S.rpc.call('hub.download', { repo: hubState.repo, file: mmproj.path, mmproj_for: basename(f.path) });
-    toast('İndirme başladı.', 'ok');
+    let note = '';
+    if (mmproj) {
+      const r = await S.rpc.call('hub.download', { repo: hubState.repo, file: mmproj.path, mmproj_for: basename(f.path), size: mmproj.size });
+      if (r?.existing) note = ' Görsel adaptör bu bilgisayarda zaten var; yeniden indirilmedi.';
+    }
+    toast(`İndirme başladı.${note}`, 'ok', note ? 6000 : undefined);
   } catch (e) { toast(e.message, 'err'); }
 }
 

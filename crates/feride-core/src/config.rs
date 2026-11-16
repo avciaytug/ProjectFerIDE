@@ -94,6 +94,8 @@ pub struct ModelSettings {
     pub server_path: Option<PathBuf>,
     /// Açılışta seçili modeli otomatik başlat.
     pub auto_start: bool,
+    /// Model Merkezi'nden model indirirken görsel adaptörü (mmproj) de indir (kullanıcının son seçimi).
+    pub download_vision: bool,
 }
 
 impl Default for ModelSettings {
@@ -106,6 +108,7 @@ impl Default for ModelSettings {
             backend: "auto".into(),
             server_path: None,
             auto_start: false,
+            download_vision: true,
         }
     }
 }

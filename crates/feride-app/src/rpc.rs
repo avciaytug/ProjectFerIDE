@@ -305,14 +305,16 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
         "hub.files" => serde_json::to_value(core.hub.files(p_str(&p, "repo")?, core.secrets.get("hf_token").as_deref()).await?)?,
         "hub.download" => {
             let parts: Vec<String> = serde_json::from_value(p["parts"].clone()).unwrap_or_default();
-            let id = core.hub.start_download(
+            let (id, existing) = core.hub.start_download(
                 p_str(&p, "repo")?,
                 p_str(&p, "file")?,
                 parts,
                 p["mmproj_for"].as_str().map(String::from),
+                p["size"].as_u64(),
                 core.secrets.get("hf_token"),
             )?;
-            json!({"id": id})
+            // existing: görsel adaptör bu bilgisayarda zaten vardı, yeniden indirilmedi.
+            json!({"id": id, "existing": existing})
         }
         "hub.downloads" => serde_json::to_value(core.hub.list_downloads())?,
         "hub.cancel" => json!(core.hub.cancel(p_str(&p, "id")?)),

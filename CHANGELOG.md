@@ -1,5 +1,17 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.22) — Görsel adaptör (mmproj) bir kez iniyor
+
+- **Aynı modelin farklı sürümleri artık tek görsel adaptörü paylaşıyor.** Önceden Q4_K, Q8_0 gibi her kuantizasyon
+  için aynı adaptör yeniden iniyordu (Qwen3.8-27B'de 931 MB × 2). Adaptör artık model ailesinin adıyla kaydediliyor
+  (ör. `Huihui-Qwen3.8-27B-abliterated__mmproj-model-bf16.gguf`). Bu bilgisayarda zaten varsa, eski adlandırmayla bir
+  sürüm için inmiş olsa bile, yeniden indirilmiyor.
+- Model Merkezi'ndeki kutu adaptörün boyutunu ve ne işe yaradığını yazıyor: model ekran görüntülerini ve resimleri
+  anlayabilsin, indirmek isteğe bağlı. Birden çok çeşit varsa en uygunu seçiliyor: F16, sonra BF16, Q8; iki kat büyük
+  F32 en son.
+- Kutunun işaretini kaldırırsanız bu seçim ayarlara kaydediliyor ve sonraki indirmelerde, FerIDE yeniden açılsa da,
+  kapalı geliyor.
+
 ## beta v5.4 (5.4.0-beta.21) — Kaldırıcı her sürücüde programı siliyor
 
 - Windows'ta kaldırıcı, kurulum programlarının yaptığı gibi kendini Geçici klasöre kopyalayıp oradan çalışıyor.
