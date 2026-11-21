@@ -246,6 +246,11 @@ impl LlamaManager {
         self.status_tx.borrow().clone()
     }
 
+    /// Çalışan llama-server'ın süreç numarası (ajanın onu kapatmasını önlemek için).
+    pub fn server_pid(&self) -> Option<u32> {
+        self.inner.lock().unwrap().kill.as_ref().and_then(|k| k.pid)
+    }
+
     pub fn subscribe(&self) -> watch::Receiver<ModelStatus> {
         self.status_tx.subscribe()
     }

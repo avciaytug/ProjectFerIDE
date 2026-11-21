@@ -83,6 +83,58 @@ pub fn is_catastrophic(cmd: &str) -> bool {
     CATASTROPHIC.iter().any(|r| r.is_match(cmd))
 }
 
+/// Komut FerIDE'yi ya da ajanı çalıştıran model sunucusunu kapatır mı? Kapatırsa nedeni döner. `text`: komut ve
+/// çalıştırdığı betiklerin içeriği; `model_pid`/`model_port`: FerIDE'nin llama-server'ı; `app_pid`: FerIDE.
+///
+/// Ajan, opencode için kurduğu ikinci bir llama-server'ı yönetirken `Get-Process -Name llama-server | Stop-Process
+/// -Force` ve `Stop-Process -Id <FerIDE'nin sunucusu>` ile kendi model sunucusunu dört kez kapattı; her seferinde
+/// konuşma "Model sunucusuna ulaşılamadı" hatasıyla koptu (2026-11-21).
+pub fn kills_own_processes(text: &str, model_pid: Option<u32>, model_port: Option<u16>, app_pid: u32) -> Option<&'static str> {
+    static KILL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\b(stop-process|spps|taskkill|tskill|pkill|killall|kill)\b|terminate\s*\(|\bterminateprocess\b|-methodname\s+terminate|\bwmic\b.*\b(delete|terminate)\b")
+            .unwrap()
+    });
+    static BY_NAME: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+        // `\bllama`: llama-server, llama*, 'llama' eşleşir; ollama eşleşmez.
+        [
+            // taskkill /IM llama-server.exe · taskkill /FI "IMAGENAME eq llama*"
+            r#"(?i)taskkill\b[^\n]*?(/im\s+|imagename\s+eq\s+)"?\S*?(\bllama|feride)"#,
+            // pkill -f llama · killall llama-server
+            r"(?i)\b(pkill|killall|tskill)\b[^\n;|&]*(\bllama|feride)",
+            // Stop-Process -Name llama-server
+            r"(?i)\b(stop-process|spps)\b[^\n|;]*-(process)?name\s+\S*?(\bllama|feride)",
+            // Get-Process llama-server | Stop-Process · ... -like 'llama*' | kill · ps aux | grep llama | xargs kill
+            r"(?i)(\bllama|feride)[^\n;]*\|\s*(xargs\b[^\n|;]*?)?(stop-process|spps|kill|taskkill)\b",
+            // kill $(pgrep llama-server) · Stop-Process -Id (Get-Process llama-server).Id
+            r"(?i)\b(kill|taskkill|stop-process|spps)\b[^\n;|]*(\$?\(|`)\s*(pgrep|pidof|get-process|gps|ps)\b[^\n)`]*(\bllama|feride)",
+            // (Get-Process llama-server).Kill() · Python: if 'llama' in p.name(): p.kill()
+            r"(?i)(\bllama|feride)[^\n;]*\.(kill|terminate)\s*\(",
+            // Get-CimInstance Win32_Process ... llama ... Terminate · wmic process where name=... delete
+            r"(?i)(win32_process|wmic)[^\n]*(\bllama|feride)[^\n]*(delete|terminate)",
+        ]
+        .iter()
+        .map(|r| Regex::new(r).unwrap())
+        .collect()
+    });
+    if !KILL.is_match(text) {
+        return None;
+    }
+    if BY_NAME.iter().any(|r| r.is_match(text)) {
+        return Some("llama-server ya da FerIDE süreçlerini adıyla toplu kapatıyor");
+    }
+    let has_number = |n: u64| Regex::new(&format!(r"\b{n}\b")).is_ok_and(|r| r.is_match(text));
+    if model_pid.is_some_and(|p| has_number(p.into())) {
+        return Some("FerIDE'nin model sunucusunun süreç numarasını (PID) hedefliyor");
+    }
+    if model_port.is_some_and(|p| has_number(p.into())) {
+        return Some("FerIDE'nin model sunucusunun portunu dinleyen süreci hedefliyor");
+    }
+    if has_number(app_pid.into()) {
+        return Some("FerIDE'nin kendi süreç numarasını hedefliyor");
+    }
+    None
+}
+
 pub fn is_sensitive_command(cmd: &str) -> bool {
     SENSITIVE_CMD.iter().any(|r| r.is_match(cmd))
 }
@@ -237,6 +289,56 @@ impl Policy<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_model_server_is_protected() {
+        let (pid, port, app) = (Some(22244), Some(63782), 28388);
+        let k = |t: &str| kills_own_processes(t, pid, port, app);
+        // Ajanın 2026-11-21'de gerçekten çalıştırdığı komutlar.
+        for c in [
+            "cat > /tmp/killall_llama.ps1 << 'EOF'\nGet-Process -Name llama-server -ErrorAction SilentlyContinue | Stop-Process -Force\nStart-Sleep -Seconds 3\nEOF\npowershell -NoProfile -File /tmp/killall_llama.ps1",
+            "cat > /tmp/kill22244.ps1 << 'EOF'\nStop-Process -Id 22244 -Force -ErrorAction SilentlyContinue\nEOF\npowershell -File /tmp/kill22244.ps1",
+            "taskkill /F /IM llama-server.exe",
+            "pkill -f llama-server",
+            "Stop-Process -Name llama-server -Force",
+            "Get-Process llama-server | Stop-Process",
+            "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :63782') do taskkill /F /PID %a",
+            "taskkill /PID 28388 /F",
+            "Stop-Process -Name feride",
+            // Aynı işin başka yazılışları.
+            "taskkill /F /FI \"IMAGENAME eq llama-server.exe\"",
+            "pkill -f llama",
+            "spps -Name 'llama*'",
+            "Get-Process | Where-Object { $_.ProcessName -like 'llama*' } | Stop-Process -Force",
+            "Get-Process | ? Path -like '*\\.feride\\*' | kill",
+            "ps aux | grep llama-server | awk '{print $2}' | xargs -r kill -9",
+            "kill -9 $(pgrep -f llama-server)",
+            "Stop-Process -Id (Get-Process llama-server).Id -Force",
+            "(Get-Process llama-server).Kill()",
+            "for p in psutil.process_iter():\n    if 'llama' in p.name(): p.kill()",
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | Invoke-CimMethod -MethodName Terminate",
+            "wmic process where name='llama-server.exe' delete",
+        ] {
+            assert!(k(c).is_some(), "engellenmeliydi: {c}");
+        }
+        // Başka bir sunucuyu PID'iyle kapatmak, süreçleri listelemek ve sıradan komutlar serbest.
+        for c in [
+            "Stop-Process -Id 25636 -Force",
+            "kill 4242",
+            "Get-Process -Name llama-server | Select-Object Id, StartTime",
+            "curl -s http://127.0.0.1:8080/v1/models",
+            "cargo build --release",
+            "llama-server -m model.gguf --port 8080",
+            "Get-Process -Name llama-server | Select-Object Id; Stop-Process -Id 25636",
+            "tail -n 5 /c/Users/Asus/FerIDE/llama-servers/llama-8080.log; kill 25636",
+            "Stop-Process -Name ollama",
+            "pkill ollama",
+        ] {
+            assert!(k(c).is_none(), "engellenmemeliydi: {c}");
+        }
+        // Model yüklü değilken yalnızca ad/FerIDE kuralları geçerli.
+        assert!(kills_own_processes("kill 22244", None, None, app).is_none());
+    }
 
     #[test]
     fn catastrophic_blocked() {

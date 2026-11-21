@@ -99,9 +99,24 @@ pub struct ToolCtx {
     pub depth: u8,
     pub shell: Shell,
     pub settings: Settings,
-    pub llm: LlmClient,
-    pub n_ctx: i64,
+    /// Model bağlantısı. Yerel model sunucusu görev sırasında kapanıp yeniden başlatılırsa (port değişir) yenisiyle
+    /// değiştirilir; alt ajanlar aynı bağlantıyı paylaşır.
+    pub llm: Arc<std::sync::RwLock<LlmClient>>,
+    /// Bağlam boyu; yeniden başlatılan sunucuda (ör. bellek azaldıysa) farklı olabilir. Alt ajanlarla paylaşılır.
+    pub n_ctx: Arc<std::sync::atomic::AtomicI64>,
     pub run: Arc<Run>,
+}
+
+impl ToolCtx {
+    /// Güncel model bağlantısı.
+    pub fn llm(&self) -> LlmClient {
+        self.llm.read().unwrap().clone()
+    }
+
+    /// Güncel bağlam boyu.
+    pub fn n_ctx(&self) -> i64 {
+        self.n_ctx.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 fn emit(core: &Core, session: &str, kind: &str, mut data: Value) {
@@ -234,8 +249,8 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
         depth: 0,
         shell: shell.clone(),
         settings: settings.clone(),
-        llm: llm.clone(),
-        n_ctx,
+        llm: Arc::new(std::sync::RwLock::new(llm.clone())),
+        n_ctx: Arc::new(std::sync::atomic::AtomicI64::new(n_ctx)),
         run: run.clone(),
     };
     let mut messages = base_messages(core, &settings, &workspace, &shell, &llm.model, history, &text, run.voice);
@@ -347,6 +362,22 @@ pub async fn prewarm(core: &Arc<Core>, session_id: Option<String>, voice: bool) 
     }
 }
 
+/// Bir görevde model sunucusu en çok bu kadar kez kendiliğinden yeniden başlatılır.
+const MAX_MODEL_RESTARTS: u32 = 3;
+
+/// Modele ulaşılamadığında: yerel sunucu beklenmedik biçimde mi kapandı? Kapanış bildirimi istek hatasından biraz
+/// sonra gelebildiği için birkaç saniye beklenir. Kullanıcının bilerek durdurduğu model ("idle") yeniden başlatılmaz.
+async fn model_server_down(core: &Core) -> bool {
+    for _ in 0..12 {
+        match core.llama.status().state.as_str() {
+            "failed" | "starting" => return true,
+            "ready" => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Asıl döngü. `messages[0]` sistem mesajı. Ana ajan ve alt ajan aynı döngüyü kullanır.
 /// Ana ajanda üretilen her mesaj oturuma eklenir.
 async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool) -> anyhow::Result<String> {
@@ -364,11 +395,14 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
         }
     };
 
+    let mut restarts = 0u32;
     for step in 1..=max_steps {
         if ctx.cancel.is_cancelled() {
             return Ok("cancelled".into());
         }
-        if context::fit(messages, ctx.n_ctx, reserve, &ctx.llm, &ctx.cancel, &status).await {
+        let llm = ctx.llm();
+        let n_ctx = ctx.n_ctx();
+        if context::fit(messages, n_ctx, reserve, &llm, &ctx.cancel, &status).await {
             compacted = true;
             if is_main {
                 let _ = core.sessions.rewrite(sid, &messages[1..]);
@@ -390,15 +424,38 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                 Delta::Status(s) => emit(core, sid, "status", json!({"text": s})),
             }
         };
-        let turn = match ctx.llm.complete(messages, &opts, &ctx.cancel, &mut on_delta).await {
+        let turn = match llm.complete(messages, &opts, &ctx.cancel, &mut on_delta).await {
             Ok(t) => t,
             Err(crate::llm::LlmError::Cancelled) => return Ok("cancelled".into()),
-            Err(e) => anyhow::bail!(e.to_string()),
+            Err(e) => {
+                // Yerel model sunucusu görev sürerken kapandıysa (çöktü ya da bir komut kapattı) görevi bitirme:
+                // sunucuyu yeniden başlat ve aynı adımı tekrarla.
+                if llm.is_local() && restarts < MAX_MODEL_RESTARTS && model_server_down(core).await {
+                    restarts += 1;
+                    status(format!(
+                        "Model sunucusu kapandı; yeniden başlatılıyor ve kaldığı yerden devam ediliyor ({restarts}/{MAX_MODEL_RESTARTS}). \
+                         Uzun sohbetlerde geçmişin yeniden işlenmesi birkaç dakika sürebilir…"
+                    ));
+                    let fresh = tokio::select! {
+                        r = core.llm(&status) => r,
+                        _ = ctx.cancel.cancelled() => return Ok("cancelled".into()),
+                    };
+                    match fresh {
+                        Ok((new_llm, new_ctx, _)) => {
+                            *ctx.llm.write().unwrap() = new_llm;
+                            ctx.n_ctx.store(new_ctx, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
+                        Err(re) => anyhow::bail!("{e}\nModel yeniden başlatılamadı: {re}"),
+                    }
+                }
+                anyhow::bail!(e.to_string())
+            }
         };
         if is_main {
             let totals = {
                 let mut u = ctx.run.usage.lock().unwrap();
-                u.add(&turn, ctx.n_ctx);
+                u.add(&turn, n_ctx);
                 u.clone()
             };
             emit(
@@ -407,7 +464,7 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                 "usage",
                 json!({"prompt_tokens": turn.prompt_tokens, "completion_tokens": turn.completion_tokens,
                        "tps": turn.tokens_per_second, "prompt_tps": turn.prompt_per_second,
-                       "ctx": ctx.n_ctx, "step": step, "compacted": compacted, "turn": totals}),
+                       "ctx": n_ctx, "step": step, "compacted": compacted, "turn": totals}),
             );
         }
 
@@ -582,16 +639,18 @@ pub fn run_subagent<'a>(
             depth: parent.depth + 1,
             shell: parent.shell.clone(),
             settings: parent.settings.clone(),
+            // Aynı bağlantı paylaşılır: model sunucusu yeniden başlarsa (port değişir) alt ajan da yenisini kullanır.
             llm: parent.llm.clone(),
-            n_ctx: parent.n_ctx,
+            n_ctx: parent.n_ctx.clone(),
             run: parent.run.clone(),
         };
+        let parent_llm = parent.llm();
         let system = prompt::build(&prompt::PromptInput {
             core: &parent.core,
             workspace: &parent.workspace,
             shell: &parent.shell,
             user_text: task,
-            model_name: &parent.llm.model,
+            model_name: &parent_llm.model,
             subagent: true,
             plan_mode: explore,
             voice: false,

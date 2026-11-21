@@ -647,6 +647,32 @@ fn edit_file(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
     Ok(ToolResult::ok(format!("Düzenlendi: {} ({n} değişiklik)", p.display())).with_ui(json!({"path": p, "diff": diff})))
 }
 
+/// Komut (ve çalıştırdığı .ps1/.bat/.cmd/.sh/.py betikleri) FerIDE'yi ya da ajanın model sunucusunu kapatır mı?
+fn own_process_kill(ctx: &ToolCtx, command: &str, cwd: &Path) -> Option<&'static str> {
+    static SCRIPT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r#"(?i)[^\s'"]+\.(ps1|bat|cmd|sh|py)\b"#).unwrap());
+    let mut text = command.to_string();
+    for m in SCRIPT.find_iter(command).take(8) {
+        let p = m.as_str();
+        // Git Bash yolları: /tmp/… → Geçici klasör, /c/… → C:\…
+        let path = if let Some(rest) = p.strip_prefix("/tmp/") {
+            std::env::temp_dir().join(rest)
+        } else if p.len() > 3 && p.as_bytes()[0] == b'/' && p.as_bytes()[2] == b'/' && p.as_bytes()[1].is_ascii_alphabetic() {
+            PathBuf::from(format!("{}:\\{}", &p[1..2], &p[3..]))
+        } else {
+            let pb = PathBuf::from(p);
+            if pb.is_absolute() { pb } else { cwd.join(pb) }
+        };
+        if std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 256 * 1024) {
+            if let Ok(t) = std::fs::read_to_string(&path) {
+                text.push('\n');
+                text.push_str(&t);
+            }
+        }
+    }
+    super::permissions::kills_own_processes(&text, ctx.core.llama.server_pid(), ctx.core.llama.status().port, std::process::id())
+}
+
 async fn run_command(ctx: &ToolCtx, a: &Value) -> ToolResult {
     let command = s(a, "command");
     if command.trim().is_empty() {
@@ -663,6 +689,23 @@ async fn run_command(ctx: &ToolCtx, a: &Value) -> ToolResult {
     };
     if !cwd.is_dir() {
         return ToolResult::err(format!("çalışma klasörü yok: {}", cwd.display()));
+    }
+    // FerIDE'yi ya da ajanın kendi model sunucusunu kapatacak komut çalıştırılmaz (konuşma kopardı).
+    if let Some(why) = own_process_kill(ctx, command, &cwd) {
+        let pid = ctx.core.llama.server_pid();
+        let port = ctx.core.llama.status().port;
+        return ToolResult::err(format!(
+            "Bu komut çalıştırılmadı: {why}. Seni çalıştıran FerIDE model sunucusu da kapanır ve konuşma kopardı{}. \
+             Başka bir llama-server'ı kapatman gerekiyorsa yalnızca onun PID'ini ver (Stop-Process -Id <PID> ya da \
+             taskkill /PID <PID>){}. Çalışanları görmek için: powershell -NoProfile -Command \"Get-Process llama-server | \
+             Select-Object Id, StartTime\"",
+            match (pid, port) {
+                (Some(p), Some(o)) => format!(" (PID {p}, port {o})"),
+                (Some(p), None) => format!(" (PID {p})"),
+                _ => String::new(),
+            },
+            pid.map(|p| format!("; {p} numaralı süreci kapatma")).unwrap_or_default()
+        ));
     }
     // Windows'ta Git Bash: "2>nul" çıktıyı atmaz, silinemeyen bir "nul" dosyası oluşturur.
     let command: Cow<str> = if cfg!(windows) && ctx.shell.kind == crate::shell::ShellKind::Bash {

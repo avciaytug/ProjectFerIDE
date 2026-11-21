@@ -196,15 +196,20 @@ impl Core {
                 .or(s.model.selected.clone())
                 .ok_or_else(|| anyhow::anyhow!("Henüz model seçilmedi. Model Merkezi'nden bir model seçip başlatın."))?;
             on_status(format!("Model yükleniyor: {}", crate::gguf::base_name(&selected)));
-            if st.state != "starting" {
+            let mut rx = self.llama.subscribe();
+            // Şimdiki durum (ör. az önce kapanan sunucunun "failed"ı) yeni başlatmanın sonucu değil: görülmüş sayılır ve
+            // başlatma onu değiştirene kadar beklenir. Yoksa eski hata, model yüklenmeden hemen yeniden bildirilirdi.
+            if st.state != "starting" && rx.borrow_and_update().state != "ready" {
                 let me = Arc::clone(self);
                 let ss = s.clone();
                 let sel = selected.clone();
                 tokio::spawn(async move {
                     let _ = me.llama.start(&ss, StartRequest { model: sel, mode: ss.model.compute_mode, ctx: ss.model.context }).await;
                 });
+                if tokio::time::timeout(std::time::Duration::from_secs(1800), rx.changed()).await.is_err() {
+                    anyhow::bail!("Model yüklenmesi çok uzun sürdü.");
+                }
             }
-            let mut rx = self.llama.subscribe();
             loop {
                 st = rx.borrow_and_update().clone();
                 match st.state.as_str() {

@@ -1,5 +1,24 @@
 # Sürüm notları
 
+## beta v5.4 (5.4.0-beta.24) — Ajan, FerIDE'nin model sunucusunu artık kapatamıyor
+
+- **"Model sunucusuna ulaşılamadı" hatasının nedeni:** ajan başka bir program için (ör. opencode) ayrı llama-server'lar
+  başlatıp yönetirken FerIDE'nin kendi model sunucusunu da kapatıyordu. Bunu ya adla toplu kapatarak
+  (`Get-Process -Name llama-server | Stop-Process`) ya da yanlış PID'i hedefleyerek yapıyordu. Sunucu kapanınca
+  konuşma kopuyordu.
+- Ajanın komutları artık çalıştırılmadan önce denetleniyor. FerIDE'nin model sunucusunu ya da FerIDE'nin kendisini
+  kapatacak komutlar çalıştırılmıyor; ajan bunun yerine, kendi başlattığı bir sunucuyu yalnızca o sunucunun PID'iyle
+  kapatabileceğini söyleyen bir açıklama alıyor. Engellenenler:
+  - llama-server süreçlerini adıyla toplu kapatan komutlar (`Stop-Process -Name`, `taskkill /IM`, `pkill`,
+    `Get-Process … | Stop-Process` ve benzerleri)
+  - model sunucusunun PID'ini ya da portunu hedefleyen komutlar
+  - bunları içeren `.ps1`, `.bat`, `.sh` ve `.py` betikleri
+- Model sunucusu görev ortasında yine de kapanırsa (çökme, başka bir programın kapatması), FerIDE onu yeniden
+  başlatıyor ve görev kaldığı yerden sürüyor. Bir görevde en fazla 3 kez yeniden başlatılıyor; "Devam et" demeye
+  gerek kalmıyor. Yeniden açılan sunucunun bağlam boyu farklıysa ajan yenisine göre çalışıyor.
+- Sunucu kapandıktan sonra "Devam et" denince eski hata bazen model yüklenmeden hemen yeniden gösteriliyordu
+  (bu yüzden mesajı iki kez göndermek gerekebiliyordu). Artık model yeniden yüklenene kadar bekleniyor.
+
 ## beta v5.4 (5.4.0-beta.23) — Ayarlar'da tekrar eden seçimler kaldırıldı
 
 - Ayarlar → Ajan ve güvenlik'ten **İzin modu** bölümü ve **Düşünme modu** satırı kaldırıldı. İkisi de zaten mesaj
