@@ -631,6 +631,8 @@ fn remove_integration(info: &InstallInfo, exe: &Path) -> Vec<String> {
 /// Veri klasöründe FerIDE'nin oluşturduğu girdiler (kaldırırken yalnızca bunlar silinir).
 const DATA_ENTRIES: &[&str] = &[
     "models", "bin", "tools", "pyenv", "voice", "sessions", "skills", "logs", "cache", "run", "trash", "resources", "aegis",
+    // FerIDE'nin tarayıcı profili (oturum çerezleri)
+    "browser",
     "config.toml", "config.toml.bozuk", "state.json", "secrets.bin", "mcp_config.json", "memory.db", "memory.db-wal",
     "memory.db-shm", "feride_knowledge.db",
     // Eski (5.3) FerIDE'den kalanlar

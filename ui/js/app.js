@@ -9,6 +9,7 @@ import * as Chat from './views/chat.js';
 import * as Models from './views/models.js';
 import * as Settings from './views/settings.js';
 import * as Setup from './views/setup.js';
+import * as Browser from './views/browser.js';
 
 export const S = {
   rpc: null,
@@ -33,6 +34,7 @@ const SIDE = {
   sessions: { icon: 'chat', title: 'Sohbetler', mod: Sessions },
 };
 const PAGES = [
+  { id: 'browser', icon: 'globe', title: 'Tarayıcı', open: () => Browser.open() },
   { id: 'models', icon: 'cpu', title: 'Model Merkezi', open: () => Models.open() },
   { id: 'settings', icon: 'settings', title: 'Ayarlar', open: () => Settings.open() },
   { id: 'setup', icon: 'wrench', title: 'Kurulum ve Tanılama', open: () => Setup.open() },

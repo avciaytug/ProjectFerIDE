@@ -17,13 +17,16 @@ use std::sync::LazyLock;
 use crate::config::PermissionMode;
 use crate::paths::{is_within, Paths};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
+    #[default]
     Read,
     Write,
     Execute,
     Network,
+    /// Tarayıcıda sayfayla etkileşim (tıklama, yazma, seçme, tuş).
+    Interact,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -282,6 +285,12 @@ impl Policy<'_> {
                 }
                 Decision::Ask("Komut çalıştırma".into())
             }
+            // Ödeme, gönderme gibi hassas tarayıcı işlemleri bu katmandan bağımsız olarak her modda sorulur (agent::browse).
+            Risk::Interact => match mode {
+                PermissionMode::Plan => Decision::Deny("Plan modundasınız: tarayıcıda yalnızca sayfa açıp okuyabilirsiniz.".into()),
+                PermissionMode::FullAuto => Decision::Allow,
+                _ => Decision::Ask("Tarayıcıda işlem (tıklama, yazma, seçme)".into()),
+            },
         }
     }
 }
@@ -405,5 +414,10 @@ mod tests {
         assert!(matches!(p(PermissionMode::FullAuto).evaluate(Risk::Write, None, &ssh, false), Decision::Ask(_)));
         // Yerel ağ isteği her modda sorulur.
         assert!(matches!(p(PermissionMode::FullAuto).evaluate(Risk::Network, None, &[], true), Decision::Ask(_)));
+        // Tarayıcıda tıklama/yazma: plan modunda yok, tam otomatikte serbest, diğerlerinde sorulur.
+        assert!(matches!(p(PermissionMode::Plan).evaluate(Risk::Interact, None, &[], false), Decision::Deny(_)));
+        assert_eq!(p(PermissionMode::FullAuto).evaluate(Risk::Interact, None, &[], false), Decision::Allow);
+        assert!(matches!(p(PermissionMode::AutoEdit).evaluate(Risk::Interact, None, &[], false), Decision::Ask(_)));
+        assert!(matches!(p(PermissionMode::Ask).evaluate(Risk::Interact, None, &[], false), Decision::Ask(_)));
     }
 }

@@ -40,6 +40,8 @@ pub struct Core {
     pub background: agent::tools::Background,
     /// Ajanın oturum başına gördüğü dosyalar (görmeden üzerine yazmayı önler).
     pub seen_files: agent::tools::SeenFiles,
+    /// FerIDE'nin kontrol ettiği gerçek tarayıcı.
+    pub browser: Arc<crate::browser::BrowserManager>,
 }
 
 impl Core {
@@ -77,6 +79,7 @@ impl Core {
             session_allow: Mutex::new(HashMap::new()),
             background: agent::tools::Background::default(),
             seen_files: agent::tools::SeenFiles::default(),
+            browser: Arc::new(crate::browser::BrowserManager::new(paths.clone(), events.clone())),
             memory,
             deps,
             events,
@@ -236,6 +239,7 @@ impl Core {
             r.cancel.cancel();
         }
         self.background.kill_all();
+        self.browser.shutdown();
         self.terminals.close_all();
         self.mcp.stop_all();
         self.voice.shutdown();

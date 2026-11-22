@@ -20,14 +20,16 @@ pub struct ToolResult {
     pub untrusted: bool,
     /// Arayüze ek bilgi (fark, dosya yolu…).
     pub ui: Option<Value>,
+    /// Modele gösterilecek görseller (data: adresleri; yalnızca görsel destekli modelde, ör. tarayıcı ekran görüntüsü).
+    pub images: Vec<String>,
 }
 
 impl ToolResult {
     pub fn ok(s: impl Into<String>) -> Self {
-        Self { content: s.into(), ok: true, untrusted: false, ui: None }
+        Self { content: s.into(), ok: true, untrusted: false, ui: None, images: vec![] }
     }
     pub fn err(s: impl Into<String>) -> Self {
-        Self { content: format!("HATA: {}", s.into()), ok: false, untrusted: false, ui: None }
+        Self { content: format!("HATA: {}", s.into()), ok: false, untrusted: false, ui: None, images: vec![] }
     }
     fn untrusted(mut self) -> Self {
         self.untrusted = true;
@@ -40,6 +42,7 @@ impl ToolResult {
 }
 
 /// İzin değerlendirmesi için araç çağrısının özeti.
+#[derive(Default)]
 pub struct Assessment {
     pub risk: Risk,
     pub command: Option<String>,
@@ -48,6 +51,11 @@ pub struct Assessment {
     pub summary: String,
     /// Onay kartında gösterilecek fark (yazma araçları).
     pub preview: Option<String>,
+    /// Hiçbir modda yapılmayacak çağrı (gerekçe modele söylenir).
+    pub block: Option<String>,
+    /// Araç bu işlemi yürütürken kullanıcıya kendisi soracak (ör. tarayıcıda ödeme düğmesi); izin katmanının genel
+    /// onayı ikinci kez sorulmaz. Plan modunun engeli geçerliliğini korur.
+    pub self_confirm: bool,
 }
 
 fn s<'a>(a: &'a Value, k: &str) -> &'a str {
@@ -245,7 +253,7 @@ fn ext_of(p: &Path) -> String {
 
 /// Çağrının riskini ve hedeflerini belirler (izin katmanı için).
 pub fn assess(ctx: &ToolCtx, name: &str, a: &Value) -> Assessment {
-    let mut asm = Assessment { risk: Risk::Read, command: None, targets: vec![], private_network: false, summary: String::new(), preview: None };
+    let mut asm = Assessment::default();
     match name {
         "read_file" | "read_document" => asm.summary = format!("Oku: {}", s(a, "path")),
         "list_directory" => asm.summary = format!("Listele: {}", if s(a, "path").is_empty() { "." } else { s(a, "path") }),
@@ -496,6 +504,7 @@ pub async fn execute(ctx: &ToolCtx, name: &str, a: &Value) -> ToolResult {
         "process" => process_tool(ctx, a),
         "web_search" => return web_search(ctx, a).await,
         "fetch_url" => return fetch_url(a).await,
+        "browser" => return super::browse::execute(ctx, a).await,
         "todo_write" => todo_write(ctx, a),
         "use_skill" => use_skill(ctx, a),
         "save_skill" => crate::skills::save(&ctx.core.paths.skills(), s(a, "name"), s(a, "description"), s(a, "content"))
@@ -873,7 +882,7 @@ async fn run_command(ctx: &ToolCtx, a: &Value) -> ToolResult {
             let code_txt = code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
             let ok = code == Some(0) && !timed_out;
             let body = format!("çıkış kodu: {code_txt}\n{}", if text.trim().is_empty() { "(çıktı yok)".into() } else { text });
-            ToolResult { content: body, ok, untrusted: false, ui: Some(json!({"exit_code": code, "cwd": cwd})) }
+            ToolResult { content: body, ok, untrusted: false, ui: Some(json!({"exit_code": code, "cwd": cwd})), images: vec![] }
         }
     }
 }

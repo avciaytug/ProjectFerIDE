@@ -45,9 +45,11 @@ function renderTabs() {
 }
 
 function activate(t) {
+  const prev = active;
   active = t;
   for (const x of tabs) x.el.classList.toggle('hidden', x !== t);
   renderTabs();
+  if (prev && prev !== t) prev.onHide?.();
   if (t.cm) setTimeout(() => { t.cm.refresh(); t.cm.focus(); }, 0);
   if (t.onShow) t.onShow();
 }

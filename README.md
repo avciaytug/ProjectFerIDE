@@ -11,8 +11,14 @@ Windows, Linux ve macOS'ta aynı davranış.
 
 - **Ajan:** dosya okuma/yazma/düzenleme, arama, kabuk komutları (Windows'ta Git Bash), web araması, belge ve CAD
   stüdyosu, alt ajanlar, yapılacaklar listesi, kalıcı hafıza, skill'ler, MCP araçları.
+- **Tarayıcı:** ajan bilgisayardaki Chrome / Edge / Brave'i FerIDE'ye ayrılmış bir profille kullanır: JavaScript'li
+  siteler, form doldurma, fiyat ve rezervasyon karşılaştırma, bu profilde giriş yaptığınız hesaplar (Gmail, Takvim,
+  Drive…). Tarayıcı paneli canlı görüntüyü gösterir; kontrolü istediğiniz an alabilirsiniz. Hesaplara giriş kontrolsüz,
+  sıradan bir pencerede yapılır.
 - **Güvenlik:** dört izin modu (Plan · Sor · Düzenlemelere izin ver · Tam otonom), yıkıcı komut engeli,
   korumalı yollar, istem enjeksiyonuna karşı güvenilmeyen içerik ayrımı, her değişiklik için geri alma noktası.
+  Tarayıcıda ajan şifre, kart ve doğrulama kodu yazamaz; ödeme, satın alma, gönderme gibi geri dönüşü olmayabilecek
+  işlemler her modda onayınıza gelir.
 - **Model Merkezi:** bellek-farkında başlatma planı (GPU / GPU+RAM / MoE uzmanları RAM'de / CPU), Hugging Face'ten
   devam ettirilebilir ve doğrulanmış indirme, görsel adaptörü (mmproj) eşleştirme.
 - **IDE:** gezgin, git durumu, CodeMirror düzenleyici, gerçek terminal, model günlüğü.
@@ -150,8 +156,9 @@ kendisiyle de yapılabilir: `feride install --yes --dir D:\FerIDE --data D:\FerI
 ### Gizlilik
 
 Modeller, konuşma tanıma ve ses tamamen bu bilgisayarda çalışır; sohbetleriniz hiçbir sunucuya gönderilmez.
-İnternet yalnızca kurulumda, model indirirken, ajandan web araması / sayfa okuma istediğinizde ve güncelleme
-denetiminde (GitHub'ın sürüm listesi; hiçbir kullanıcı verisi gönderilmez, Ayarlar'dan kapatılabilir) kullanılır.
+İnternet yalnızca kurulumda, model indirirken, ajandan web araması / sayfa okuma / tarayıcı kullanımı istediğinizde
+ve güncelleme denetiminde (GitHub'ın sürüm listesi; hiçbir kullanıcı verisi gönderilmez, Ayarlar'dan kapatılabilir)
+kullanılır. Tarayıcı profili (çerezler, oturumlar) yalnızca bu bilgisayarda, veri klasöründe durur.
 
 ### Kaynaktan derleme
 
@@ -191,6 +198,7 @@ ikisinin de önüne geçer. Kullanılan klasör Ayarlar → Genel'de ve `feride 
 | `sessions/` | Sohbetler (JSONL) ve geri alma noktaları |
 | `memory.db` | Kalıcı hafıza |
 | `mcp_config.json` | MCP sunucuları |
+| `browser/profile/` | FerIDE'nin tarayıcı profili (oturumlar, çerezler) |
 | `bin/llama-cpp/`, `tools/` | llama.cpp, Git, Node.js, uv |
 | `logs/` | Günlükler |
 

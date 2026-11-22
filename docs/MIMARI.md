@@ -65,6 +65,7 @@ Amaç: her işletim sisteminde aynı davranan, kurulumu kendi yapan, çökmeye d
 | `voice` | İsteğe bağlı Python STT/TTS sunucularının denetimi; ses arayüzde çalınır. |
 | `terminal` | Gerçek terminal (ConPTY / PTY) + xterm.js. |
 | `fsops` | Gezgin, düzenleyici, arama ve git durumu için dosya işlemleri. |
+| `browser` | FerIDE'nin kontrol ettiği gerçek tarayıcı (Chrome / Edge / Brave / Chromium, ayrı profil `<veri>/browser/profile`): Chrome DevTools Protocol istemcisi (`cdp`), sekmeler, sayfa betiği (`page.js`, yalıtılmış dünyada: numaralı öğeli metin görüntüsü, tıklama noktası, yazma hazırlığı), canlı görüntü akışı ve panel girdisi, kontrolsüz hesap giriş penceresi, güvenlik kuralları (`safety`). Ajan aracı: `agent/browse.rs`. |
 
 ## Güvenlik katmanları
 
@@ -75,7 +76,8 @@ Amaç: her işletim sisteminde aynı davranan, kurulumu kendi yapan, çökmeye d
 5. **Güvenilmeyen içerik:** web sayfası, belge ve MCP çıktıları modele `<untrusted_content>` içinde verilir; sistem talimatı bunların komut olmadığını belirtir.
 6. **Ağ:** ajanın yerel ağ/loopback adreslerine erişimi her zaman onaya tabi (SSRF koruması).
 7. **Kontrol noktaları:** ajanın değiştirdiği her dosyanın önceki hali saklanır; tek tıkla geri alınır.
-8. **Markdown:** DOMPurify ile temizlenir; harici bağlantılar sistem tarayıcısında açılır.
+8. **Tarayıcı:** ayrı profil; şifre, kart, IBAN ve doğrulama kodu alanlarına ajan hiçbir modda yazamaz; ödeme, satın alma, gönderme, başvuru, silme, indirme ve kimlik numarası girişi her modda, işlemden hemen önce, öğenin o anki hâline göre kullanıcıya sorulur; tarayıcının iç sayfaları açılamaz; uzaktan kontrol sitelere gizlenmez (hesap girişi kontrolsüz pencerede yapılır).
+9. **Markdown:** DOMPurify ile temizlenir; harici bağlantılar sistem tarayıcısında açılır.
 
 ## Kurulum akışı (ilk açılış)
 

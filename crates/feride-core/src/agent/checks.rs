@@ -3,7 +3,7 @@
 //!
 //! - Her izin modunda: dosyayı çalıştırmayan sözdizimi denetimleri (JSON, TOML, Python derlemesi, `node --check`,
 //!   `bash -n`, `gofmt -e`, `rustfmt --check`).
-//! - Yalnızca "Hiçbir şey sorma" modunda: projenin kodunu çalıştırabilen tür denetimleri (`cargo check` derleme
+//! - Yalnızca "Tam otonom" modunda: projenin kodunu çalıştırabilen tür denetimleri (`cargo check` derleme
 //!   betiklerini ve makroları, `tsc` projedeki node_modules'u çalıştırır). Diğer modlarda komutlar onaya bağlı olduğu
 //!   için bunlar kendiliğinden çalıştırılmaz.
 

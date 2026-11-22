@@ -64,6 +64,11 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
                 "logs" => core.paths.logs(),
                 "skills" => core.paths.skills(),
                 "models" => core.paths.models(),
+                "browser" => {
+                    let d = core.browser.profile_dir();
+                    std::fs::create_dir_all(&d)?;
+                    d
+                }
                 other => fsops::sanitize_ui_path(other)?,
             };
             open::that_detached(&target)?;
@@ -478,6 +483,54 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
         "voice.speak" => {
             let s = core.settings();
             json!(core.voice.speak(p_str(&p, "text")?, &s.voice.voice, s.voice.speed).await?)
+        }
+
+        // ------------------------------------------------------------ tarayıcı
+        "browser.status" => serde_json::to_value(core.browser.status())?,
+        "browser.detect" => serde_json::to_value(feride_core::browser::detect_all())?,
+        "browser.start" => {
+            core.browser.tab(&core.settings().browser).await.map_err(|e| anyhow!(e))?;
+            serde_json::to_value(core.browser.status())?
+        }
+        "browser.close" => {
+            core.browser.close().await;
+            json!(true)
+        }
+        "browser.open" => {
+            core.browser.user_open(&core.settings().browser, p_str(&p, "url")?).await.map_err(|e| anyhow!(e))?;
+            json!(true)
+        }
+        "browser.nav" => {
+            core.browser.user_nav(&core.settings().browser, p_str(&p, "action")?).await.map_err(|e| anyhow!(e))?;
+            json!(true)
+        }
+        "browser.view" => {
+            core.browser.set_view(p["on"].as_bool().unwrap_or(false)).await;
+            json!(true)
+        }
+        "browser.input" => {
+            core.browser.user_input(&p).await.map_err(|e| anyhow!(e))?;
+            json!(true)
+        }
+        "browser.control" => {
+            core.browser.set_user_control(p["user"].as_bool().unwrap_or(false));
+            json!(true)
+        }
+        "browser.switch" => {
+            core.browser.user_switch(&core.settings().browser, p_str(&p, "id")?).await.map_err(|e| anyhow!(e))?;
+            json!(true)
+        }
+        "browser.close_tab" => {
+            core.browser.close_tab(p_str(&p, "id")?).await.map_err(|e| anyhow!(e))?;
+            json!(true)
+        }
+        "browser.front" => {
+            core.browser.front(&core.settings().browser).await.map_err(|e| anyhow!(e))?;
+            json!(true)
+        }
+        "browser.login" => {
+            core.browser.open_login(&core.settings().browser, p["url"].as_str().unwrap_or("")).await.map_err(|e| anyhow!(e))?;
+            json!(true)
         }
 
         other => bail!("bilinmeyen yöntem: {other}"),

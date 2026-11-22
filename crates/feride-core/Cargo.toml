@@ -35,6 +35,8 @@ base64 = "0.22"
 rust-embed = "8"
 open = { version = "5", features = ["shellexecute-on-windows"] }
 url = "2"
+# Tarayıcı kontrolü (Chrome DevTools Protocol); axum'un kullandığı sürümle aynı.
+tokio-tungstenite = "0.29"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

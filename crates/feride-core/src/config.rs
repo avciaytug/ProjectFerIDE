@@ -45,6 +45,25 @@ pub struct Settings {
     pub editor: EditorSettings,
     pub disabled_skills: Vec<String>,
     pub updates: UpdateSettings,
+    pub browser: BrowserSettings,
+}
+
+/// FerIDE'nin kontrol ettiği tarayıcı (bkz. `browser`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserSettings {
+    /// Ajan tarayıcıyı `browser` aracıyla kullanabilsin.
+    pub enabled: bool,
+    /// auto | chrome | edge | brave | chromium | custom
+    pub kind: String,
+    /// kind = custom: tarayıcı programının yolu.
+    pub path: Option<PathBuf>,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self { enabled: true, kind: "auto".into(), path: None }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +93,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             disabled_skills: vec![],
             updates: UpdateSettings::default(),
+            browser: BrowserSettings::default(),
         }
     }
 }

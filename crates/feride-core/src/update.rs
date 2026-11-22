@@ -728,7 +728,7 @@ mod tests {
         // Kullanıcının ekranındaki hata: "Uygulama Denetimi ilkesi bu dosyayı engelledi. (os error 4551)".
         assert!(crate::winsec::is_policy_block(&std::io::Error::from_raw_os_error(4551)));
         assert!(!crate::winsec::is_policy_block(&std::io::Error::from_raw_os_error(2)));
-        let m = blocked_message("5.4.26-beta");
-        assert!(m.contains("FerIDE v5.4.26 beta") && m.contains("Akıllı Uygulama Denetimi") && m.contains("Yeniden dene"));
+        let m = blocked_message("5.4.27-beta");
+        assert!(m.contains("FerIDE v5.4.27 beta") && m.contains("Akıllı Uygulama Denetimi") && m.contains("Yeniden dene"));
     }
 }

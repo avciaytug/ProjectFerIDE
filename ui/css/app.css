@@ -489,3 +489,25 @@ body.installer-body { overflow: auto; background: radial-gradient(ellipse at 50%
 .inst-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .inst-portable { color: var(--fg-3); }
 .inst-portable:hover { color: var(--fg); }
+
+/* ---------------------------------------------------------------- tarayıcı paneli */
+#editor-area > .page.browser-page { display: flex; flex-direction: column; overflow: hidden; }
+.btop { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+.btop input { height: 28px; min-width: 0; }
+.bbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 12px; min-height: 34px; }
+.bbar .btab { display: inline-flex; align-items: center; gap: 2px; max-width: 220px; padding: 1px 2px 1px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; color: var(--fg-2); }
+.bbar .btab:hover { background: var(--bg-4); }
+.bbar .btab.active { border-color: var(--accent); color: var(--fg); background: var(--accent-bg); }
+.bbar .btab .icon-btn { width: 20px; height: 20px; }
+.bwait { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--accent-bg); border-bottom: 1px solid var(--accent); font-size: 13px; }
+.bstage { flex: 1; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; background: var(--bg); outline: none; overflow: hidden; padding: 6px; }
+.bstage:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-bg); }
+.bstage.agent .bshot { outline: 2px solid var(--accent); }
+.bshot { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; box-shadow: var(--shadow); border-radius: 4px; }
+.boverlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; background: var(--bg); color: var(--fg-2); }
+.boverlay .i { width: 28px; height: 28px; }
+.boverlay h3 + div, .boverlay .col > div { line-height: 1.5; }
+.approval.wait { border-color: var(--accent); background: var(--accent-bg); }
+.approval.sensitive { border: 2px solid var(--warn); }
+.approval-shot, .tool-shot { display: block; max-width: 100%; max-height: 220px; border: 1px solid var(--line); border-radius: 6px; margin: 6px 0; cursor: zoom-in; }
+.tool .tb .tool-shot { margin: 8px 10px 0; max-width: calc(100% - 20px); }

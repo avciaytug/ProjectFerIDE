@@ -1,6 +1,6 @@
 // Ajan paneli: sohbet, araç kartları, onaylar, yapılacaklar, ses.
 import { S, placementLabel, saveSettings } from '../app.js';
-import { h, icon, toast, renderMarkdown, basename, store, confirmBox, copyText, fmtBytes } from '../util.js';
+import { h, icon, toast, renderMarkdown, basename, store, confirmBox, copyText, fmtBytes, modal } from '../util.js';
 import { Mic, encodeWav, bytesToB64 } from '../audio.js';
 import * as Editor from './editor.js';
 import * as Sessions from './sessions.js';
@@ -404,7 +404,7 @@ const TOOL_LABEL = {
   read_file: 'Dosya okundu', write_file: 'Dosya yazıldı', edit_file: 'Dosya düzenlendi', list_directory: 'Klasör listelendi', glob: 'Dosya arandı',
   grep: 'İçerik arandı', run_command: 'Komut', web_search: 'Web araması', fetch_url: 'Sayfa okundu', todo_write: 'Yapılacaklar', use_skill: 'Skill',
   remember: 'Hafızaya kaydedildi', recall: 'Hafıza', spawn_agent: 'Alt ajan', read_document: 'Belge okundu', edit_document: 'Belge', open_in_system: 'Açıldı',
-  save_skill: 'Skill kaydedildi', process: 'Arka plan işlemi',
+  save_skill: 'Skill kaydedildi', process: 'Arka plan işlemi', browser: 'Tarayıcı',
 };
 
 function summarize(name, a) {
@@ -418,6 +418,7 @@ function summarize(name, a) {
     case 'use_skill': return a.name;
     case 'spawn_agent': return a.task;
     case 'edit_document': return a.output_path;
+    case 'browser': return [a.action, a.url, a.ref != null ? `[${a.ref}]` : '', a.text ? `"${a.text}"` : '', a.key, a.value ? `→ ${a.value}` : '', a.message].filter(Boolean).join(' ');
     default: return name.startsWith('mcp__') ? JSON.stringify(a).slice(0, 160) : '';
   }
 }
@@ -433,6 +434,7 @@ function toolCard(id, name, summary, isRunning, sub = false) {
 }
 
 function iconFor(n) {
+  if (n === 'browser') return 'globe';
   if (n === 'run_command' || n === 'process') return 'terminal';
   if (n.includes('search') || n === 'grep' || n === 'glob') return 'search';
   if (n.includes('write') || n.includes('edit')) return 'edit';
@@ -457,7 +459,14 @@ function finishCard(c, ok, output, ui) {
   } else {
     c.pre.textContent = output || '';
   }
+  // Tarayıcı ekran görüntüsü: kartın başında küçük önizleme.
+  if (ui?.image) c.pre.before(shotEl(ui.image, 'tool-shot'));
   if (!ok) c.el.classList.add('open');
+}
+
+function shotEl(src, cls) {
+  return h('img', { class: cls, src, alt: 'Ekran görüntüsü', title: 'Büyütmek için tıklayın',
+    onclick: () => modal({ title: 'Tarayıcı', wide: true, body: h('img', { src, style: { maxWidth: '100%' } }), actions: [{ label: 'Kapat' }] }) });
 }
 
 // ---------------------------------------------------------------- canlı akış
@@ -531,6 +540,8 @@ function handleEvent(ev) {
       live.block.body.insertBefore(c.el, live.status);
       live.status.innerHTML = '';
       live.status.append(icon('loader', 'spin'), `${TOOL_LABEL[ev.name] || ev.name}…`);
+      // Ajan tarayıcıyı kullanıyorsa ne yaptığı görünsün.
+      if (ev.name === 'browser' && !ev.sub) import('./browser.js').then((b) => b.ensureOpen());
       break;
     }
     case 'tool_end': {
@@ -567,22 +578,35 @@ function handleEvent(ev) {
 }
 
 function showApproval(ev) {
-  const msgInput = h('input', { type: 'text', placeholder: 'Reddederken not (isteğe bağlı): ör. "önce testleri çalıştır"', style: { width: '100%' } });
+  // wait: ajan kullanıcının tarayıcıda bir işi yapmasını bekliyor (giriş, CAPTCHA, ödeme…) → "Devam et".
+  // once: hassas işlem (ödeme, gönderme…) → "Bu sohbette hep izin ver" sunulmaz.
+  const wait = !!ev.wait;
+  const msgInput = h('input', { type: 'text', placeholder: wait ? 'Ajana not (isteğe bağlı)' : 'Reddederken not (isteğe bağlı): ör. "önce testleri çalıştır"', style: { width: '100%' } });
   const answer = (a) => S.rpc.call('chat.approve', { session, id: ev.id, answer: a, message: msgInput.value }).catch((e) => toast(e.message, 'err'));
-  const el = h('div', { class: 'approval' },
-    h('div', { class: 'q' }, icon('shield'), `Onay gerekiyor: ${ev.reason}`),
-    h('div', { class: 'mono small' }, ev.summary),
+  const acts = wait
+    ? [h('button', { class: 'btn primary sm', onclick: () => answer('allow') }, icon('check'), 'Devam et'),
+      h('button', { class: 'btn sm', onclick: () => import('./browser.js').then((b) => b.open()) }, icon('globe'), 'Tarayıcıyı göster'),
+      h('button', { class: 'btn sm', title: 'Site hesap girişini engelliyorsa: tarayıcıyı aynı profille sıradan bir pencerede açar',
+        onclick: () => S.rpc.call('browser.login', { url: '' }).then(() => toast('Giriş penceresi açıldı. Girişi yapıp pencereyi kapatın, sonra Devam et\'e basın.', 'ok', 8000)).catch((e) => toast(e.message, 'err')) },
+      icon('login'), 'Hesaplarıma giriş yap'),
+      h('button', { class: 'btn danger sm', onclick: () => answer('deny') }, 'Vazgeç')]
+    : [h('button', { class: 'btn primary sm', onclick: () => answer('allow') }, icon('check'), 'İzin ver'),
+      ev.once ? null : h('button', { class: 'btn sm', onclick: () => answer('session') }, 'Bu sohbette hep izin ver'),
+      h('button', { class: 'btn danger sm', onclick: () => answer('deny') }, 'Reddet')];
+  const el = h('div', { class: `approval ${wait ? 'wait' : ''} ${ev.once && !wait ? 'sensitive' : ''}` },
+    h('div', { class: 'q' }, icon(wait ? 'hand' : 'shield'), wait ? 'Ajan seni bekliyor' : `Onay gerekiyor: ${ev.reason}`),
+    h('div', { class: wait ? '' : 'mono small' }, ev.summary),
+    ev.image ? shotEl(ev.image, 'approval-shot') : null,
     ev.preview ? diffPre(ev.preview) : null,
-    h('div', { class: 'acts' },
-      h('button', { class: 'btn primary sm', onclick: () => answer('allow') }, icon('check'), 'İzin ver'),
-      h('button', { class: 'btn sm', onclick: () => answer('session') }, 'Bu sohbette hep izin ver'),
-      h('button', { class: 'btn danger sm', onclick: () => answer('deny') }, 'Reddet')),
+    h('div', { class: 'acts' }, acts),
     h('div', { style: { marginTop: '6px' } }, msgInput));
   live.approvals.set(ev.id, el);
   live.block.body.insertBefore(el, live.status);
   live.status.innerHTML = '';
-  live.status.append(icon('shield'), 'Onayınız bekleniyor');
-  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('FerIDE: onay gerekiyor', { body: ev.summary });
+  live.status.append(icon(wait ? 'hand' : 'shield'), wait ? 'Seni bekliyor' : 'Onayınız bekleniyor');
+  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    new Notification(wait ? 'FerIDE: ajan seni bekliyor' : 'FerIDE: onay gerekiyor', { body: ev.summary });
+  }
 }
 
 function diffPre(text) {

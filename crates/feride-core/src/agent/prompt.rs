@@ -85,6 +85,18 @@ pub fn build(inp: &PromptInput) -> String {
          kapatma (Stop-Process -Name llama-server, taskkill /IM llama-server.exe, pkill llama-server); kendi sunucunu \
          kapatırsan konuşma kopar. Kendi başlattığın bir sunucuyu kapatman gerekirse yalnızca onun PID'ini kullan.\n\n",
     );
+    if !inp.subagent && crate::browser::available(&inp.core.settings().browser) {
+        p.push_str(
+            "# Tarayıcı (browser aracı)\n\
+             - Gerçek bir tarayıcı kullanırsın; kullanıcının bu tarayıcıda giriş yaptığı hesaplar (Gmail, Takvim, Drive…) açıktır.\n\
+             - JavaScript'li siteler, giriş gerektiren sayfalar ve formlar için browser; düz bir sayfayı okumak için fetch_url daha hızlıdır.\n\
+             - Her işlemden sonra sayfanın metni ve [numaralı] öğeleri gelir; öğelere bu numarayla başvur. Numara bulunamazsa snapshot al.\n\
+             - Şifre, kart ve doğrulama kodu yazamazsın. Giriş, CAPTCHA, ödeme ve dosya yükleme için wait_for_user ile kullanıcıyı çağır. \
+             Site hesap girişini engellerse kullanıcıdan Tarayıcı panelindeki \"Hesaplarıma giriş yap\" ile normal pencerede girmesini iste.\n\
+             - Ödeme, satın alma, rezervasyon, gönderme, başvuru, silme gibi son adımlar kullanıcı onayına gider; oraya gelince ne \
+             yapacağını kısaca açıkla. Çerez bildirimlerinde \"Reddet\" ya da \"Yalnızca gerekli\"yi seç.\n\n",
+        );
+    }
     if inp.plan_mode {
         p.push_str(
             "# PLAN MODU\nKullanıcı plan modunu seçti: hiçbir dosyayı değiştirme ve değişiklik yapan komut çalıştırma. \

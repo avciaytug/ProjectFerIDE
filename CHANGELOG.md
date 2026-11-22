@@ -1,5 +1,62 @@
 # Sürüm notları
 
+## v5.4.26 beta — Tarayıcı: ajan artık gerçek bir tarayıcıyı kullanabiliyor
+
+**Tarayıcı**
+
+- Ajanın yeni `browser` aracı, bilgisayardaki Chrome, Edge ya da Brave'i FerIDE'ye ayrılmış bir profille açıp
+  kullanıyor: JavaScript'le çalışan sitelerde (uçuş/otel arama, haritalar) geziniyor, form dolduruyor, tıklıyor,
+  açılır listelerden seçiyor, sekmeler arasında geçiyor, ekran görüntüsü alıyor. Önceki `fetch_url` yalnızca sayfanın
+  HTML'ini indiriyordu; JavaScript çalıştıramıyor, tıklayamıyor, giriş yapamıyordu.
+- Sayfa ajana kısa bir metin olarak veriliyor: başlıklar, metin ve tıklanabilir/yazılabilir öğeler `[numara]` ile.
+  - Açık iletişim kutuları (çerez bildirimi, açılır pencere) en üstte gösteriliyor.
+  - Gölge DOM ve aynı kökenli çerçeveler dahil, gizli öğeler hariç tutuluyor.
+  - Yerel modelin bağlamı dolmasın diye eski sayfa çıktıları kısaltılıyor.
+- Görsel adaptörü (mmproj) yüklü modellerde ekran görüntüsü modele de gidiyor.
+- Yeni **Tarayıcı paneli** (sol çubukta küre simgesi): tarayıcının canlı görüntüsü FerIDE'nin içinde. Oradan tıklayıp
+  yazabilir, adres açabilir, sekmeleri yönetebilirsiniz. "Kontrolü al" ajanı bekletir. Ajan tarayıcıyı kullanmaya
+  başlayınca panel kendiliğinden açılıyor.
+- **Hesaplarıma giriş yap:** Google gibi siteler uzaktan kontrol edilen tarayıcıda hesap girişine izin vermiyor. Bu
+  düğme tarayıcıyı aynı profille, kontrol olmadan, sıradan bir pencere olarak açıyor. Hesaplarınıza orada girip
+  pencereyi kapatıyorsunuz; oturumlar profilde kalıyor ve ajan onları kullanıyor. FerIDE, tarayıcının uzaktan kontrol
+  edildiğini sitelere gizlemiyor.
+- Ajan sizin yapmanız gereken bir iş olduğunda (giriş, CAPTCHA, ödeme, dosya yükleme) "Ajan seni bekliyor" kartıyla
+  duruyor; işi bitirince "Devam et"e basıyorsunuz.
+- Ayarlar → Tarayıcı:
+  - tarayıcı kullanımını açma/kapama
+  - tarayıcı seçimi (otomatik / Chrome / Edge / Brave / Chromium / başka bir program)
+  - giriş penceresi ve profil klasörü
+
+**Güvenlik**
+
+- Ajan şifre, kart numarası, CVV, IBAN ve doğrulama kodu alanlarına hiçbir modda yazamıyor. Kart numarasına ya da
+  IBAN'a benzeyen metinleri de yazamıyor; dosya yükleme alanlarını kullanıcıya bırakıyor.
+- Şunlar "Tam otonom" modunda bile her seferinde, sayfanın ekran görüntüsüyle birlikte onayınıza geliyor:
+  - ödeme, satın alma, rezervasyon, gönderme, başvuru, silme, indirme gibi geri dönüşü olmayabilecek işlemler
+  - kimlik ve pasaport numarası girişi
+  - sohbet ve e-posta kutularında Enter / Ctrl+Enter
+
+  Denetim, öğenin o anki hâline göre işlemden hemen önce yapılıyor.
+- Plan modunda tarayıcıda yalnızca sayfa açılıp okunabiliyor. "Her işlemde sor" ve "Düzenlemelere izin ver" modlarında
+  tıklama ve yazma onaya geliyor.
+- Sayfa içerikleri ajana dış veri olarak veriliyor. Ajan tarayıcının ayar sayfalarını (`chrome://` …) ve
+  `javascript:` / `data:` adreslerini açamıyor. Sayfanın açtığı onay pencereleri iptal ediliyor; az önce onayladığınız
+  işlemin açtığı onay penceresi kabul ediliyor.
+
+**Skill'ler**
+
+- **tarayici-ile-calisma:** tarayıcıyla çalışma yöntemi.
+- **seyahat-planlama:**
+  - uçuş, konaklama ve ulaşım karşılaştırma
+  - gün gün plan ve bütçe
+  - vize gereklilikleri ve evrak listesi
+  - ödemeyi ve son gönderimi kullanıcıya bırakma
+
+**Diğer**
+
+- FerIDE'yi verilerle birlikte kaldırınca tarayıcı profili (oturumlar) de siliniyor.
+- Ayarlar'daki açıklamalarda "Tam otonom" modu yanlış adla ("Hiçbir şey sorma") geçiyordu; düzeltildi.
+
 ## v5.4.25 beta — Daha sağlam düzenleme, düzenleme sonrası otomatik hata denetimi
 
 **Ajanın dosya düzenlemesi**

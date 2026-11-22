@@ -14,6 +14,7 @@ export function open(which) {
 const TABS = [
   ['general', 'Genel', 'settings'],
   ['agent', 'Ajan ve güvenlik', 'shield'],
+  ['browser', 'Tarayıcı', 'globe'],
   ['mcp', 'MCP sunucuları', 'plug'],
   ['skills', 'Skill\'ler', 'sparkles'],
   ['memory', 'Hafıza', 'brain'],
@@ -26,7 +27,7 @@ function render() {
     TABS.map(([id, label, ic]) => h('button', { class: `btn ${tab === id ? 'primary' : 'ghost'}`, onclick: () => { tab = id; render(); } }, icon(ic), label)));
   const body = h('div');
   el.append(h('div', { class: 'page-inner' }, h('h2', {}, 'Ayarlar'), nav, body));
-  ({ general, agent, mcp, skills, memory, voice })[tab](body);
+  ({ general, agent, browser, mcp, skills, memory, voice })[tab](body);
 }
 
 // ---------------------------------------------------------------- güncellemeler
@@ -89,7 +90,7 @@ async function uninstallDialog(inst) {
     body: h('div', { class: 'col' },
       h('div', {}, 'FerIDE kapatılacak; program dosyaları, kısayollar ve "Uygulamalar" kaydı silinecek.'),
       h('label', { class: 'check', style: { alignItems: 'flex-start' } }, purge,
-        h('span', {}, 'Modelleri, sohbetleri, indirilen araçları ve ayarları da sil (', sizeEl, ')',
+        h('span', {}, 'Modelleri, sohbetleri, indirilen araçları, tarayıcı oturumlarını ve ayarları da sil (', sizeEl, ')',
           h('div', { class: 'mono tiny muted' }, inst.data_dir))),
       h('div', { class: 'tiny muted' }, 'İşaretlemezseniz veri klasörü yerinde kalır; FerIDE\'yi yeniden kurduğunuzda kaldığınız yerden devam eder.')),
     actions: [
@@ -157,10 +158,42 @@ function agent(body) {
     field('Sıcaklık', 'Düşük: tutarlı, yüksek: yaratıcı', select(a.temperature, [[0.2, '0,2'], [0.4, '0,4'], [0.6, '0,6'], [0.8, '0,8'], [1.0, '1,0']], (v) => saveSettings({ agent: { temperature: Number(v) } }))),
     field('Komut zaman aşımı', null, select(a.command_timeout_secs, [[60, '1 dk'], [300, '5 dk'], [900, '15 dk'], [1800, '30 dk']], (v) => saveSettings({ agent: { command_timeout_secs: Number(v) } }))),
     field('Araç çıktısı sınırı', 'Modele verilen en fazla karakter', select(a.max_tool_output_chars, [[8000, '8 bin'], [16000, '16 bin'], [32000, '32 bin'], [64000, '64 bin']], (v) => saveSettings({ agent: { max_tool_output_chars: Number(v) } }))),
-    field('Düzenleme sonrası denetim', 'Ajan bir dosyayı yazınca ya da düzenleyince dosyanın diline göre hızlı bir hata denetimi çalışır ve bulunan hatalar hemen ajana bildirilir: JSON, TOML, Python, JavaScript, kabuk betikleri, Go ve Rust (rustfmt). "Hiçbir şey sorma" modunda ayrıca cargo check ve TypeScript için tsc çalışır.',
+    field('Düzenleme sonrası denetim', 'Ajan bir dosyayı yazınca ya da düzenleyince dosyanın diline göre hızlı bir hata denetimi çalışır ve bulunan hatalar hemen ajana bildirilir: JSON, TOML, Python, JavaScript, kabuk betikleri, Go ve Rust (rustfmt). "Tam otonom" modunda ayrıca cargo check ve TypeScript için tsc çalışır.',
       check(a.check_after_edit !== false, (v) => saveSettings({ agent: { check_after_edit: v } })))));
   body.append(h('div', { class: 'section' }, h('div', { class: 'sh' }, h('h3', {}, 'Proje talimatları')),
     h('div', { class: 'small muted' }, 'Çalışma alanının kökündeki FERIDE.md (ya da AGENTS.md / CLAUDE.md) dosyası her görevde ajana proje talimatı olarak verilir. Kod stili, test komutu, yasaklar gibi kalıcı kuralları buraya yazın.')));
+}
+
+async function browser(body) {
+  const b = S.settings.browser || {};
+  const found = await S.rpc.call('browser.detect').catch(() => []);
+  const st = await S.rpc.call('browser.status').catch(() => null);
+  const opts = [['auto', `Otomatik${found[0] ? ` (${found[0].name})` : ''}`], ...found.map((f) => [f.kind, f.name]), ['custom', 'Başka bir tarayıcı (yolunu gir)']];
+  const pathIn = h('input', { type: 'text', value: b.path || '', placeholder: 'ör. C:\\Program Files\\Vivaldi\\Application\\vivaldi.exe', style: { width: '100%' },
+    onchange: (e) => saveSettings({ browser: { path: e.target.value.trim() || null } }) });
+  const login = () => S.rpc.call('browser.login', { url: '' }).then(() => toast('Giriş penceresi açıldı. Hesaplarınıza girin, sonra o pencereyi kapatın.', 'ok', 7000)).catch((e) => toast(e.message, 'err'));
+  body.append(h('div', { class: 'section' },
+    h('div', { class: 'sh' }, h('h3', { class: 'grow' }, 'Tarayıcı'),
+      h('button', { class: 'btn sm', onclick: () => import('./browser.js').then((m) => m.open()) }, icon('globe'), 'Tarayıcı panelini aç')),
+    h('div', { class: 'small muted', style: { marginBottom: '8px' } }, 'Ajan, bilgisayarınızdaki Chrome / Edge / Brave tarayıcısını FerIDE\'ye ayrılmış bir profille kullanır: JavaScript\'li siteleri gezer, form doldurur, fiyat ve rezervasyon karşılaştırır, bu profilde giriş yaptığınız hesaplarla (Gmail, Takvim, Drive…) çalışır. Kişisel tarayıcınız ve oradaki oturumlarınız etkilenmez. Ajanın ne yaptığını Tarayıcı panelinden canlı izleyebilir, isterseniz kontrolü alabilirsiniz.'),
+    field('Ajanın tarayıcı kullanması', found.length ? null : 'Bu bilgisayarda Chrome, Edge, Brave ya da Chromium bulunamadı.', check(b.enabled !== false, (v) => saveSettings({ browser: { enabled: v } }), 'Açık')),
+    field('Kullanılacak tarayıcı', null, select(b.kind || 'auto', opts, async (v) => { await saveSettings({ browser: { kind: v } }); render(); })),
+    b.kind === 'custom' ? field('Tarayıcı programı', 'Chromium tabanlı bir tarayıcının (Chrome, Edge, Brave, Vivaldi, Opera…) çalıştırılabilir dosyası', pathIn) : null,
+    field('Hesaplar', 'Google gibi bazı siteler uzaktan kontrol edilen tarayıcıda hesap girişine izin vermez. Bu düğme tarayıcıyı aynı profille, kontrol olmadan sıradan bir pencere olarak açar: hesaplarınıza orada girin (şifre ve iki adımlı doğrulama sizde kalır), sonra pencereyi kapatın. Oturumlar profilde kalır ve ajan onları kullanır.',
+      h('button', { class: 'btn sm', onclick: login }, icon('login'), 'Hesaplarıma giriş yap')),
+    field('Profil klasörü', 'Oturumlar ve çerezler burada saklanır. Profildeki oturumlardan çıkmak için giriş penceresinde hesaplardan çıkış yapın.',
+      h('div', { class: 'row', style: { minWidth: '0' } }, h('span', { class: 'mono small nowrap grow', title: st?.profile || '' }, st?.profile || ''),
+        h('button', { class: 'btn sm', onclick: () => S.rpc.call('app.open_path', { path: 'browser' }).catch((e) => toast(e.message, 'err')) }, icon('folder'), 'Aç')))));
+  const li = (t) => h('li', {}, t);
+  body.append(h('div', { class: 'section' }, h('div', { class: 'sh' }, h('h3', {}, 'Güvenlik')),
+    h('ul', { class: 'small', style: { margin: '0', paddingLeft: '18px', lineHeight: '1.7' } },
+      li('Ajan şifre, kart numarası, CVV, IBAN ve doğrulama kodu alanlarına hiçbir modda yazamaz; bu bilgileri siz girersiniz.'),
+      li('Ödeme, satın alma, rezervasyon, gönderme, başvuru, silme ve indirme gibi geri dönüşü olmayabilecek işlemler "Tam otonom" modunda bile her seferinde, sayfanın ekran görüntüsüyle birlikte onayınıza gelir.'),
+      li('Kimlik ve pasaport numarası girişi her seferinde onayınıza gelir.'),
+      li('Sayfa içerikleri ajana "dış veri" olarak verilir; sayfalarda yazan talimatlar uygulanmaz.'),
+      li('CAPTCHA ve "robot değilim" doğrulamalarını ajan çözmez; sizi çağırır.'),
+      li('Plan modunda ajan tarayıcıda yalnızca sayfa açıp okuyabilir; "Her işlemde sor" ve "Düzenlemelere izin ver" modlarında tıklama ve yazma onayınıza gelir ("Bu sohbette hep izin ver" ile o sohbet için açabilirsiniz).'),
+      li('Tarayıcı, uzaktan kontrol edildiğini sitelere gizlemez.'))));
 }
 
 async function mcp(body) {

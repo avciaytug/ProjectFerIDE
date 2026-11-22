@@ -41,6 +41,36 @@ pub fn tools_tokens(tools: &[Value]) -> i64 {
     (tools.iter().map(|t| t.to_string().len()).sum::<usize>() / 3) as i64
 }
 
+/// Bu kadar tam tarayıcı çıktısı birikince sonuncusu dışındakiler kısaltılır.
+const BROWSER_FULL_MAX: usize = 3;
+
+/// Eski tarayıcı çıktıları (sayfa metinleri, ekran görüntüleri) bağlamı doldurmasın: tam çıktı sayısı sınırı aşınca
+/// sonuncusu dışındakiler tek satırlık bir özetle değiştirilir. Kısaltma toplu yapılır ki yerel sunucu önbelleği (KV)
+/// her adımda bozulmasın. Kısa çıktılar (hatalar, kullanıcı yanıtları) olduğu gibi kalır.
+pub fn elide_browser(messages: &mut [Value]) {
+    let full: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m["role"] == "tool" && m["name"] == "browser" && (!m["content"].is_string() || content_text(&m["content"]).chars().count() > 700))
+        .map(|(i, _)| i)
+        .collect();
+    if full.len() <= BROWSER_FULL_MAX {
+        return;
+    }
+    for &i in &full[..full.len() - 1] {
+        let text = content_text(&messages[i]["content"]);
+        if text.chars().count() <= 700 {
+            // Yalnızca görsel atılır, metin kalır.
+            messages[i]["content"] = json!(text);
+            continue;
+        }
+        let head = text.lines().find(|l| l.starts_with("Sayfa: ")).map(|l| crate::util::truncate_end(l, 200)).unwrap_or_default();
+        messages[i]["content"] = json!(format!(
+            "<untrusted_content source=\"browser\">[Eski tarayıcı çıktısı kaldırıldı] {head}</untrusted_content>"
+        ));
+    }
+}
+
 /// Gerekirse mesajları sığdırır. `messages[0]` sistem mesajıdır.
 /// Dönüş: sıkıştırma yapıldıysa yeni (sistem hariç) geçmiş.
 pub async fn fit(
@@ -152,6 +182,27 @@ pub async fn fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_browser_outputs_are_elided() {
+        let page = |n: usize| {
+            json!({"role": "tool", "name": "browser", "content": format!(
+                "<untrusted_content source=\"browser\">\nSayfa: Sayfa {n} — https://ornek.com/{n}\n{}\n</untrusted_content>", "x".repeat(2000))})
+        };
+        let mut m = vec![json!({"role": "system", "content": "s"}), page(1), page(2), page(3)];
+        elide_browser(&mut m);
+        assert!(m[1..].iter().all(|x| content_text(&x["content"]).len() > 1000), "sınır aşılmadan kısaltılmamalı");
+        m.push(json!({"role": "tool", "name": "browser", "content": "HATA: kısa"}));
+        m.push(json!({"role": "tool", "name": "browser", "content": [
+            {"type": "text", "text": "Tarayıcının ekran görüntüsü ektedir."}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}));
+        m.push(page(4));
+        elide_browser(&mut m);
+        assert!(content_text(&m[1]["content"]).contains("[Eski tarayıcı çıktısı kaldırıldı] Sayfa: Sayfa 1 — https://ornek.com/1"));
+        assert!(content_text(&m[3]["content"]).contains("Eski tarayıcı"));
+        assert_eq!(m[4]["content"], "HATA: kısa");
+        assert!(m[5]["content"].is_string(), "eski ekran görüntüsü atılmalı");
+        assert!(content_text(&m[6]["content"]).len() > 1000, "son çıktı olduğu gibi kalmalı");
+    }
 
     #[test]
     fn estimate() {

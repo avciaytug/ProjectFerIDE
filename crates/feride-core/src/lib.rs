@@ -1,6 +1,7 @@
 //! FerIDE çekirdeği: model yönetimi, ajan, araçlar, MCP, skill, hafıza, kurulum.
 
 pub mod agent;
+pub mod browser;
 pub mod config;
 pub mod core;
 pub mod deps;

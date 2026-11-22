@@ -4,6 +4,7 @@
 //!   kind: start | status | content | reasoning | tool_start | tool_end | approval | approval_resolved |
 //!         todos | usage | turn_saved | done
 
+pub mod browse;
 pub mod checks;
 pub mod context;
 pub mod edit;
@@ -106,6 +107,8 @@ pub struct ToolCtx {
     pub llm: Arc<std::sync::RwLock<LlmClient>>,
     /// Bağlam boyu; yeniden başlatılan sunucuda (ör. bellek azaldıysa) farklı olabilir. Alt ajanlarla paylaşılır.
     pub n_ctx: Arc<std::sync::atomic::AtomicI64>,
+    /// Model görsel görebiliyor (yerelde görsel adaptörü / mmproj yüklü).
+    pub vision: bool,
     pub run: Arc<Run>,
 }
 
@@ -253,6 +256,7 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
         settings: settings.clone(),
         llm: Arc::new(std::sync::RwLock::new(llm.clone())),
         n_ctx: Arc::new(std::sync::atomic::AtomicI64::new(n_ctx)),
+        vision,
         run: run.clone(),
     };
     let mut messages = base_messages(core, &settings, &workspace, &shell, &llm.model, history, &text, run.voice);
@@ -309,6 +313,7 @@ fn base_messages(
         }
         m
     }));
+    context::elide_browser(&mut messages);
     messages
 }
 
@@ -316,6 +321,10 @@ fn base_messages(
 fn tool_specs_for(core: &Core, explore_only: bool, main: bool) -> Vec<Value> {
     let docs = core.paths.pyenv().join(".feride-docs").exists();
     let mut specs = tools::builtin_specs(explore_only, main, docs);
+    // Tarayıcı yalnızca ana ajanda (alt ajanlar aynı sekmeyi paylaşıp birbirini bozmasın).
+    if !explore_only && main && crate::browser::available(&core.settings().browser) {
+        specs.push(browse::spec());
+    }
     if !explore_only {
         for t in core.mcp.tools() {
             specs.push(json!({"type": "function", "function": {
@@ -404,6 +413,7 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
         }
         let llm = ctx.llm();
         let n_ctx = ctx.n_ctx();
+        context::elide_browser(messages);
         if context::fit(messages, n_ctx, reserve, &llm, &ctx.cancel, &status).await {
             compacted = true;
             if is_main {
@@ -510,6 +520,7 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
 
         for call in &turn.tool_calls {
             let started = Instant::now();
+            let mut images: Vec<String> = vec![];
             let (output, ok, ui) = if ctx.cancel.is_cancelled() {
                 ("İptal edildi.".to_string(), false, None)
             } else {
@@ -526,7 +537,7 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                         if repeats >= 4 {
                             return Ok("loop".into());
                         }
-                        let asm = tools::assess(ctx, &call.name, &args);
+                        let asm = if call.name == "browser" { browse::assess(ctx, &args).await } else { tools::assess(ctx, &call.name, &args) };
                         if is_main || ctx.depth > 0 {
                             emit(core, sid, "tool_start", json!({
                                 "id": call.id, "name": call.name, "args": args, "summary": asm.summary, "sub": ctx.depth > 0
@@ -552,6 +563,9 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                                 if repeats >= 2 {
                                     content.push_str("\n\n[Sistem notu: bu çağrıyı aynı parametrelerle tekrarladın. Sonuç değişmeyecek; farklı bir yaklaşım dene ya da işi bitir.]");
                                 }
+                                if ctx.vision {
+                                    images = r.images;
+                                }
                                 (content, r.ok, r.ui)
                             }
                         }
@@ -563,7 +577,15 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                 "ui": ui, "ms": started.elapsed().as_millis() as u64, "sub": ctx.depth > 0
             }));
             let tool_msg = json!({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": output});
-            messages.push(tool_msg.clone());
+            if images.is_empty() {
+                messages.push(tool_msg.clone());
+            } else {
+                // Görsel destekli yerel model: görsel (ör. tarayıcı ekran görüntüsü) araç sonucunun içinde gider.
+                // Oturum dosyasına yalnızca metin yazılır; eski görseller bağlamdan atılır (context::elide_browser).
+                let mut parts = vec![json!({"type": "text", "text": output})];
+                parts.extend(images.iter().map(|u| json!({"type": "image_url", "image_url": {"url": u}})));
+                messages.push(json!({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": parts}));
+            }
             if is_main {
                 core.sessions.append(sid, &tool_msg)?;
             }
@@ -578,9 +600,15 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
 }
 
 fn decide(ctx: &ToolCtx, name: &str, asm: &tools::Assessment) -> Decision {
+    if let Some(r) = &asm.block {
+        return Decision::Deny(r.clone());
+    }
     let mode = ctx.core.settings().agent.permission_mode; // görev sürerken mod değişirse hemen etkiler
     let policy = Policy { mode, workspace: &ctx.workspace, paths: &ctx.core.paths };
     let d = policy.evaluate(asm.risk, asm.command.as_deref(), &asm.targets, asm.private_network);
+    if matches!(d, Decision::Ask(_)) && asm.self_confirm && !asm.private_network {
+        return Decision::Allow;
+    }
     if let Decision::Ask(_) = &d {
         let allowed = ctx.core.session_allow.lock().unwrap().get(&ctx.session_id).map(|s| s.contains(name)).unwrap_or(false);
         // "Bu sohbette hep izin ver" yalnızca sıradan onaylar için geçerli; yerel ağ ve hassas yollar her seferinde sorulur.
@@ -591,21 +619,30 @@ fn decide(ctx: &ToolCtx, name: &str, asm: &tools::Assessment) -> Decision {
     d
 }
 
-async fn ask_user(ctx: &ToolCtx, name: &str, asm: &tools::Assessment, reason: &str) -> Result<(), String> {
+/// Onay kartı gösterir ve kullanıcının yanıtını bekler. `card`: karttaki alanlar (tool, summary, reason, risk…; tarayıcı
+/// ayrıca `once` = "Bu sohbette hep izin ver" yok, `wait` = "Devam et" kartı, `image` = sayfanın ekran görüntüsü).
+pub(crate) async fn approval(ctx: &ToolCtx, mut card: Value, timeout: std::time::Duration) -> ApprovalAnswer {
     let id = uuid::Uuid::new_v4().simple().to_string()[..10].to_string();
     let (tx, rx) = oneshot::channel();
     ctx.run.approvals.lock().unwrap().insert(id.clone(), tx);
-    emit(&ctx.core, &ctx.session_id, "approval", json!({
-        "id": id, "tool": name, "summary": asm.summary, "reason": reason, "risk": asm.risk,
-        "command": asm.command, "preview": asm.preview, "targets": asm.targets
-    }));
+    card["id"] = json!(id);
+    emit(&ctx.core, &ctx.session_id, "approval", card);
     let answer = tokio::select! {
         a = rx => a.unwrap_or(ApprovalAnswer::Deny(None)),
-        _ = tokio::time::sleep(std::time::Duration::from_secs(900)) => ApprovalAnswer::Deny(Some("15 dakika içinde yanıt verilmedi.".into())),
+        _ = tokio::time::sleep(timeout) => ApprovalAnswer::Deny(Some(format!("{} dakika içinde yanıt verilmedi.", timeout.as_secs() / 60))),
         _ = ctx.cancel.cancelled() => ApprovalAnswer::Deny(Some("Ajan durduruldu.".into())),
     };
     ctx.run.approvals.lock().unwrap().remove(&id);
     emit(&ctx.core, &ctx.session_id, "approval_resolved", json!({"id": id, "answer": format!("{answer:?}")}));
+    answer
+}
+
+async fn ask_user(ctx: &ToolCtx, name: &str, asm: &tools::Assessment, reason: &str) -> Result<(), String> {
+    let card = json!({
+        "tool": name, "summary": asm.summary, "reason": reason, "risk": asm.risk,
+        "command": asm.command, "preview": asm.preview, "targets": asm.targets
+    });
+    let answer = approval(ctx, card, std::time::Duration::from_secs(900)).await;
     match answer {
         ApprovalAnswer::Allow => Ok(()),
         ApprovalAnswer::AllowSession => {
@@ -644,6 +681,7 @@ pub fn run_subagent<'a>(
             // Aynı bağlantı paylaşılır: model sunucusu yeniden başlarsa (port değişir) alt ajan da yenisini kullanır.
             llm: parent.llm.clone(),
             n_ctx: parent.n_ctx.clone(),
+            vision: parent.vision,
             run: parent.run.clone(),
         };
         let parent_llm = parent.llm();
