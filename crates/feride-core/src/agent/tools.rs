@@ -139,13 +139,19 @@ pub fn builtin_specs(explore: bool, can_spawn: bool, docs: bool) -> Vec<Value> {
         ),
         spec(
             "edit_file",
-            "Dosyada metin değiştirir. old_string dosyada AYNEN (boşluklar dahil) ve tek kez geçmeli; değilse daha fazla bağlam ekle ya da replace_all kullan. Önce read_file ile oku.",
+            "Dosyada metin değiştirir. old_string dosyadaki metinle aynı olmalı ve tek yerde geçmeli (girinti ve boşluk farkları tolere edilir, yeni metnin girintisi dosyaya uydurulur); birden çok yerde geçiyorsa daha fazla bağlam ekle ya da replace_all kullan. Aynı dosyada birden çok değişiklik için edits listesini kullan: hepsi birlikte uygulanır ya da hiçbiri. Önce read_file ile oku.",
             obj(json!({
                 "path": {"type": "string"},
                 "old_string": {"type": "string"},
                 "new_string": {"type": "string"},
-                "replace_all": {"type": "boolean"}
-            }), &["path", "old_string", "new_string"]),
+                "replace_all": {"type": "boolean"},
+                "edits": {"type": "array", "description": "Aynı dosyada sırayla uygulanacak birden çok değişiklik",
+                    "items": {"type": "object", "properties": {
+                        "old_string": {"type": "string"},
+                        "new_string": {"type": "string"},
+                        "replace_all": {"type": "boolean"}
+                    }, "required": ["old_string", "new_string"]}}
+            }), &["path"]),
         ),
         spec(
             "run_command",
@@ -256,7 +262,7 @@ pub fn assess(ctx: &ToolCtx, name: &str, a: &Value) -> Assessment {
         "edit_file" => {
             let p = resolve_path(ctx, s(a, "path"));
             if let Ok(old) = std::fs::read_to_string(&p) {
-                if let Ok((new, _)) = apply_edit(&old, s(a, "old_string"), s(a, "new_string"), a["replace_all"].as_bool().unwrap_or(false)) {
+                if let Ok((new, _, _)) = apply_edit_args(&old, a) {
                     asm.preview = Some(unified_diff(&old, &new, &p));
                 }
             }
@@ -333,41 +339,38 @@ pub fn unified_diff(old: &str, new: &str, path: &Path) -> String {
 
 /// Metin değişikliği uygular. Windows satır sonları (CRLF) farkını tolere eder.
 pub fn apply_edit(text: &str, old: &str, new: &str, replace_all: bool) -> Result<(String, usize), String> {
-    if old.is_empty() {
-        return Err("old_string boş olamaz (yeni dosya için write_file kullan).".into());
+    super::edit::apply(text, old, new, replace_all).map(|a| (a.text, a.count))
+}
+
+/// edit_file'ın tüm değişikliklerini sırayla uygular: `old_string`/`new_string` ve `edits` listesi. Biri bile
+/// uygulanamazsa hata döner ve hiçbiri yazılmaz. Dönüş: yeni metin, değişiklik sayısı, modele bildirilecek notlar.
+fn apply_edit_args(text: &str, a: &Value) -> Result<(String, usize, Vec<String>), String> {
+    let edits = a["edits"].as_array().filter(|e| !e.is_empty());
+    let mut list: Vec<(&str, &str, bool)> = vec![];
+    if !s(a, "old_string").is_empty() || edits.is_none() {
+        list.push((s(a, "old_string"), s(a, "new_string"), a["replace_all"].as_bool().unwrap_or(false)));
     }
-    if old == new {
-        return Err("old_string ile new_string aynı.".into());
+    for e in edits.into_iter().flatten() {
+        list.push((s(e, "old_string"), s(e, "new_string"), e["replace_all"].as_bool().unwrap_or(false)));
     }
-    let try_one = |o: &str, n: &str| -> Option<Result<(String, usize), String>> {
-        let count = text.matches(o).count();
-        if count == 0 {
-            return None;
+    let many = list.len() > 1;
+    let mut cur = text.to_string();
+    let (mut total, mut notes) = (0, vec![]);
+    for (i, (old, new, all)) in list.into_iter().enumerate() {
+        let r = super::edit::apply(&cur, old, new, all).map_err(|e| {
+            if many {
+                format!("{}. değişiklik uygulanamadı; hiçbir değişiklik yazılmadı: {e}", i + 1)
+            } else {
+                e
+            }
+        })?;
+        cur = r.text;
+        total += r.count;
+        if let Some(n) = r.note {
+            notes.push(if many { format!("{}. değişiklik: {n}", i + 1) } else { n });
         }
-        if count > 1 && !replace_all {
-            return Some(Err(format!(
-                "old_string dosyada {count} kez geçiyor. Benzersiz olması için çevresinden daha fazla satır ekle ya da replace_all=true kullan."
-            )));
-        }
-        Some(Ok(if replace_all { (text.replace(o, n), count) } else { (text.replacen(o, n, 1), 1) }))
-    };
-    if let Some(r) = try_one(old, new) {
-        return r;
     }
-    if text.contains("\r\n") && !old.contains("\r\n") {
-        let (o, n) = (old.replace('\n', "\r\n"), new.replace('\n', "\r\n"));
-        if let Some(r) = try_one(&o, &n) {
-            return r;
-        }
-    }
-    // Satır sonu boşlukları farkı için ipucu.
-    let trimmed: String = old.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n");
-    let hint = if text.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n").contains(&trimmed) {
-        " (satır sonlarındaki boşluklar farklı olabilir)"
-    } else {
-        ""
-    };
-    Err(format!("old_string dosyada bulunamadı{hint}. Dosyayı read_file ile yeniden oku ve metni aynen kopyala."))
+    Ok((cur, total, notes))
 }
 
 pub fn is_private_url(u: &str) -> bool {
@@ -433,6 +436,31 @@ impl Background {
     }
 }
 
+/// Ajanın her oturumda gördüğü (okuduğu, yazdığı, düzenlediği) dosyalar ve o andaki değiştirilme zamanları.
+/// Var olan bir dosyanın üzerine, ajan onu görmeden ya da gördükten sonra dosya değişmişken yazılmasını önler.
+#[derive(Default)]
+pub struct SeenFiles(Mutex<HashMap<String, HashMap<PathBuf, Option<std::time::SystemTime>>>>);
+
+impl SeenFiles {
+    fn key(p: &Path) -> PathBuf {
+        std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    }
+
+    fn mtime(p: &Path) -> Option<std::time::SystemTime> {
+        std::fs::metadata(p).and_then(|m| m.modified()).ok()
+    }
+
+    pub fn mark(&self, session: &str, p: &Path) {
+        self.0.lock().unwrap().entry(session.to_string()).or_default().insert(Self::key(p), Self::mtime(p));
+    }
+
+    /// Dosyanın bu oturumda görülen hâli hâlâ güncel mi?
+    pub fn fresh(&self, session: &str, p: &Path) -> bool {
+        let now = Self::mtime(p);
+        self.0.lock().unwrap().get(session).and_then(|m| m.get(&Self::key(p))).is_some_and(|t| *t == now)
+    }
+}
+
 // ----------------------------------------------------------------- yürütme
 
 pub async fn execute(ctx: &ToolCtx, name: &str, a: &Value) -> ToolResult {
@@ -441,8 +469,29 @@ pub async fn execute(ctx: &ToolCtx, name: &str, a: &Value) -> ToolResult {
         "list_directory" => list_directory(ctx, a),
         "glob" => glob_tool(ctx, a),
         "grep" => grep_tool(ctx, a),
-        "write_file" => write_file(ctx, a),
-        "edit_file" => edit_file(ctx, a),
+        "write_file" | "edit_file" => {
+            let r = if name == "write_file" { write_file(ctx, a) } else { edit_file(ctx, a) };
+            return match r {
+                Ok(mut res) => {
+                    // Yazılan dosyayı dilinin denetleyicisiyle denetle; hatalar aynı çıktıda modele gider.
+                    let settings = ctx.core.settings();
+                    if res.ok && settings.agent.check_after_edit {
+                        let p = resolve_path(ctx, s(a, "path"));
+                        let full = settings.agent.permission_mode == crate::config::PermissionMode::FullAuto;
+                        tokio::select! {
+                            extra = super::checks::after_write(&ctx.core.paths, &p, full) => {
+                                if let Some(x) = extra {
+                                    res.content.push_str(&x);
+                                }
+                            }
+                            _ = ctx.cancel.cancelled() => {}
+                        }
+                    }
+                    res
+                }
+                Err(e) => ToolResult::err(e),
+            };
+        }
         "run_command" => return run_command(ctx, a).await,
         "process" => process_tool(ctx, a),
         "web_search" => return web_search(ctx, a).await,
@@ -530,6 +579,7 @@ fn read_file(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
     } else if offset - 1 + limit < total {
         out.push_str(&format!("\n[{total} satırın {offset}-{} arası gösterildi; devamı için offset kullan]", (offset - 1 + limit).min(total)));
     }
+    ctx.core.seen_files.mark(&ctx.session_id, &p);
     Ok(ToolResult::ok(out))
 }
 
@@ -629,9 +679,19 @@ fn grep_tool(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
 fn write_file(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
     let p = resolve_path(ctx, s(a, "path"));
     let content = a["content"].as_str().ok_or("content gerekli")?;
+    // Var olan dosyanın üzerine, ajan onu bu oturumda görmeden ya da gördükten sonra dosya değişmişken yazılmaz
+    // (yerel modeller kullanıcının dosyasını okumadan baştan yazabiliyor).
+    if p.is_file() && !ctx.core.seen_files.fresh(&ctx.session_id, &p) {
+        return Err(format!(
+            "{} zaten var ve bu oturumda okumadın (ya da okuduktan sonra değişti). Üzerine yazmadan önce read_file ile \
+             oku; küçük bir değişiklik için edit_file kullan.",
+            p.display()
+        ));
+    }
     let old = std::fs::read_to_string(&p).unwrap_or_default();
     ctx.core.sessions.checkpoint_file(&ctx.session_id, ctx.turn, &p).map_err(|e| e.to_string())?;
     crate::util::write_atomic(&p, content.as_bytes()).map_err(|e| e.to_string())?;
+    ctx.core.seen_files.mark(&ctx.session_id, &p);
     let diff = unified_diff(&old, content, &p);
     Ok(ToolResult::ok(format!("Yazıldı: {} ({} satır)", p.display(), content.lines().count()))
         .with_ui(json!({"path": p, "diff": diff})))
@@ -640,11 +700,26 @@ fn write_file(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
 fn edit_file(ctx: &ToolCtx, a: &Value) -> Result<ToolResult, String> {
     let p = resolve_path(ctx, s(a, "path"));
     let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-    let (new, n) = apply_edit(&text, s(a, "old_string"), s(a, "new_string"), a["replace_all"].as_bool().unwrap_or(false))?;
+    let (new, n, notes) = apply_edit_args(&text, a)?;
     ctx.core.sessions.checkpoint_file(&ctx.session_id, ctx.turn, &p).map_err(|e| e.to_string())?;
     crate::util::write_atomic(&p, new.as_bytes()).map_err(|e| e.to_string())?;
+    ctx.core.seen_files.mark(&ctx.session_id, &p);
     let diff = unified_diff(&text, &new, &p);
-    Ok(ToolResult::ok(format!("Düzenlendi: {} ({n} değişiklik)", p.display())).with_ui(json!({"path": p, "diff": diff})))
+    let mut msg = format!("Düzenlendi: {} ({n} değişiklik)", p.display());
+    if !notes.is_empty() {
+        // Metin birebir uygulanmadı: model sonucu dosyayı yeniden okumadan görebilsin.
+        for note in &notes {
+            msg.push_str("\nNot: ");
+            msg.push_str(note);
+        }
+        let lines: Vec<&str> = diff.lines().filter(|l| !l.starts_with("---") && !l.starts_with("+++")).collect();
+        msg.push_str("\nYapılan değişiklik:\n");
+        msg.push_str(&lines.iter().take(40).copied().collect::<Vec<_>>().join("\n"));
+        if lines.len() > 40 {
+            msg.push_str(&format!("\n… {} satır daha", lines.len() - 40));
+        }
+    }
+    Ok(ToolResult::ok(msg).with_ui(json!({"path": p, "diff": diff})))
 }
 
 /// Komut (ve çalıştırdığı .ps1/.bat/.cmd/.sh/.py betikleri) FerIDE'yi ya da ajanın model sunucusunu kapatır mı?
@@ -1051,6 +1126,43 @@ async fn edit_document(ctx: &ToolCtx, a: &Value) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_files_guard_overwrites() {
+        let d = std::env::temp_dir().join(format!("feride-seen-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("a.txt");
+        std::fs::write(&f, "eski").unwrap();
+        let seen = SeenFiles::default();
+        assert!(!seen.fresh("s1", &f), "okunmamış dosya güncel sayılmamalı");
+        seen.mark("s1", &f);
+        assert!(seen.fresh("s1", &f));
+        assert!(!seen.fresh("s2", &f), "başka oturumun gördüğü sayılmaz");
+        // Dosya sonradan (ör. kullanıcı ya da bir komut) değişirse yeniden okunmalı.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&f).unwrap().set_modified(later).unwrap();
+        assert!(!seen.fresh("s1", &f));
+        // Aynı dosyanın farklı yazılışı (./a.txt) aynı kayda düşer.
+        seen.mark("s1", &d.join(".").join("a.txt"));
+        assert!(seen.fresh("s1", &f));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn edit_args_apply_all_or_nothing() {
+        let t = "a = 1\nb = 2\n";
+        let a = json!({"edits": [{"old_string": "a = 1", "new_string": "a = 10"}, {"old_string": "b = 2", "new_string": "b = 20"}]});
+        let (n, c, notes) = apply_edit_args(t, &a).unwrap();
+        assert_eq!((n.as_str(), c, notes.len()), ("a = 10\nb = 20\n", 2, 0));
+        // İkincisi bulunamazsa hiçbiri uygulanmaz ve hangi değişiklik olduğu söylenir.
+        let a = json!({"edits": [{"old_string": "a = 1", "new_string": "a = 10"}, {"old_string": "yok", "new_string": "x"}]});
+        let e = apply_edit_args(t, &a).unwrap_err();
+        assert!(e.starts_with("2. değişiklik uygulanamadı; hiçbir değişiklik yazılmadı"), "{e}");
+        // Tek değişiklik: eski biçim.
+        let (n, _, _) = apply_edit_args(t, &json!({"old_string": "b = 2", "new_string": "b = 3"})).unwrap();
+        assert_eq!(n, "a = 1\nb = 3\n");
+        assert!(apply_edit_args(t, &json!({})).unwrap_err().contains("boş olamaz"));
+    }
 
     #[test]
     fn edits() {

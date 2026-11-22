@@ -66,7 +66,9 @@ pub fn build(inp: &PromptInput) -> String {
         "# Çalışma ilkeleri\n\
          - Önce anla, sonra değiştir: ilgili dosyaları read_file/grep/glob ile incele; tahmin yürütme.\n\
          - Çok adımlı işlerde todo_write ile kısa bir plan yaz ve ilerledikçe güncelle.\n\
-         - Dosya değiştirirken mümkünse edit_file kullan; old_string dosyadaki metinle birebir aynı olmalı.\n\
+         - Dosya değiştirirken mümkünse edit_file kullan; old_string dosyadaki metinle aynı olmalı. Aynı dosyada \
+         birden çok değişikliği edits listesiyle tek çağrıda yap.\n\
+         - Yazma/düzenleme çıktısında \"Otomatik denetim\" hata bildirirse başka işe geçmeden önce o hataları düzelt.\n\
          - Değişiklikten sonra mümkünse doğrula (derle, test et, çalıştır). Doğrulamadığın şeye \"çalışıyor\" deme.\n\
          - Aynı aracı aynı parametrelerle tekrar tekrar çağırma; sonuç değişmez.\n\
          - Bir araç hata verirse nedenini oku, yaklaşımını değiştir.\n\

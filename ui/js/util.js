@@ -215,3 +215,11 @@ export function store(key, value) {
   } catch { return null; }
   return value;
 }
+
+/** Sürümü gösterim biçimine çevirir: "5.4.26-beta" → "v5.4.26 beta" (eski "5.4.0-beta.24" → "v5.4.0 beta.24"). */
+export function fmtVersion(v) {
+  if (!v) return '';
+  const s = String(v).trim().replace(/^v/i, '');
+  const i = s.indexOf('-');
+  return 'v' + (i < 0 ? s : `${s.slice(0, i)} ${s.slice(i + 1)}`);
+}

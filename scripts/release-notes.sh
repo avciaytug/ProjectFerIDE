@@ -31,8 +31,13 @@ ile indirmeyi doğrulayabilirsiniz.
 
 EOF
 
-# CHANGELOG'da "(5.4.0-beta.4)" içeren başlıktan bir sonraki "## " başlığına kadar.
-awk -v ver="($VER)" '
-  index($0, "## ") == 1 { if (found) exit; if (index($0, ver)) { found = 1; sub(/^## /, "## Bu sürümde: ") } }
+# CHANGELOG'da sürümün başlığından ("## v5.4.25 beta — …" ya da eski biçim "… (5.4.0-beta.4) …") bir sonraki
+# "## " başlığına kadar.
+DISP="v${VER/-/ }"
+awk -v ver="($VER)" -v disp="## $DISP" '
+  index($0, "## ") == 1 {
+    if (found) exit
+    if (index($0, ver) || $0 == disp || index($0, disp " ") == 1) { found = 1; sub(/^## /, "## Bu sürümde: ") }
+  }
   found
 ' "$CHANGELOG"

@@ -1,5 +1,54 @@
 # Sürüm notları
 
+## v5.4.25 beta — Daha sağlam düzenleme, düzenleme sonrası otomatik hata denetimi
+
+**Ajanın dosya düzenlemesi**
+
+- `edit_file` artık metni birebir bulamadığında pes etmiyor. Yerel modellerin en sık yaptığı kopyalama hatalarını
+  tolere ediyor:
+  - eksik ya da fazla girinti
+  - sekme ve boşluk karışıklığı
+  - satır başı/sonu boşlukları ve satır içi fazla boşluklar
+  - blok içinde atlanan ya da eklenen boş satırlar
+  - `\n` gibi harfiyen yazılmış kaçış dizileri
+
+  Gevşek eşleşme yalnızca dosyada tek bir yere uyuyorsa uygulanıyor. Yeni metnin girintisi dosyanınkine uyduruluyor
+  (gerekirse boşluklar sekmeye çevriliyor). Model, ne yapıldığını ve değişikliğin farkını aynı çıktıda görüyor.
+- Metin hiçbir yerde bulunamazsa hata mesajında dosyadaki en benzer bölüm satır numaralarıyla gösteriliyor. Model dosyayı
+  baştan okumadan doğru metni kopyalayabiliyor.
+- Aynı dosyada birden çok değişiklik tek çağrıda yapılabiliyor (`edits` listesi). Hepsi birlikte uygulanıyor ya da hiçbiri;
+  her model adımı yerel modelde pahalı olduğu için bu, işleri belirgin şekilde hızlandırıyor.
+- Düzeltme: girintisi eksik kopyalanmış tek satırlık bir metin girintinin ortasında birebir eşleşince, eklenen sonraki
+  satırlar yanlış girintiyle yazılıyordu. Ayrıca CRLF (Windows) satır sonlu dosyalara LF satır sonu karışabiliyordu.
+- Var olan bir dosyanın üzerine, ajan onu o oturumda okumadan (ya da okuduktan sonra dosya değişmişken) `write_file` ile
+  yazılamıyor. Ajan önce okumaya yönlendiriliyor; yerel modeller kullanıcının dosyasını okumadan baştan yazabiliyordu.
+
+**Düzenleme sonrası otomatik denetim**
+
+- Ajan bir dosyayı yazınca ya da düzenleyince dosyanın diline göre hızlı bir hata denetimi çalışıyor. Bulunan hatalar aynı
+  araç çıktısında, satır numarasıyla ajana bildiriliyor; ajan bunları başka işe geçmeden düzeltiyor.
+- Her modda yalnızca dosyayı çalıştırmayan denetimler kullanılıyor:
+  - JSON ve TOML (FerIDE'nin içinde)
+  - Python (derleme, `__pycache__` oluşturmadan)
+  - JavaScript (`node --check`)
+  - kabuk betikleri (`bash -n`)
+  - Go (`gofmt -e`)
+  - Rust (`rustfmt`)
+- "Hiçbir şey sorma" modunda ayrıca Rust için `cargo check` ve TypeScript için projedeki `tsc` çalışıyor. Yalnızca
+  düzenlenen dosyanın hataları gösteriliyor, diğer dosyalardaki hatalar sayı olarak bildiriliyor. Bu iki denetim projenin
+  kodunu da çalıştırabildiği (derleme betikleri, `node_modules`) için diğer modlarda kendiliğinden çalışmıyor.
+- Yanlış alarm vermemesi için JSX içeren `.js` dosyaları ve yorum içerebilen JSON dosyaları (`tsconfig`, `.vscode`)
+  denetlenmiyor. Windows Mağazası'nın sahte `python.exe` kısayolu ve WSL başlatıcısı kullanılmıyor.
+- Ayarlar → Ajan ve güvenlik → **Düzenleme sonrası denetim** ile kapatılabiliyor.
+
+**Sürüm numarası**
+
+- Sürüm numarası sadeleşti: `5.4.0-beta.24`'ten sonra **v5.4.25 beta** geliyor. Beta sayısı artık sürümün son hanesi
+  (sonraki: v5.4.26 beta). Pencere başlığı, üst çubuk, karşılama sayfası, Ayarlar ve GitHub'daki sürüm adı bu biçimi
+  kullanıyor.
+- Uygulama içi güncelleme ve kurulum betikleri yeni numarayı eski beta'lardan yeni sayıyor; güncelleme her zamanki gibi
+  gelir.
+
 ## beta v5.4 (5.4.0-beta.24) — Ajan, FerIDE'nin model sunucusunu artık kapatamıyor
 
 - **"Model sunucusuna ulaşılamadı" hatasının nedeni:** ajan başka bir program için (ör. opencode) ayrı llama-server'lar

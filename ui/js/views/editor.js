@@ -206,7 +206,7 @@ export function showWelcome() {
   const card = (ic, title, text, run) => h('div', { class: 'card', onclick: run }, icon(ic), h('h3', {}, title), h('p', {}, text));
   const el = h('div', { class: 'page welcome-page' },
     h('div', { class: 'welcome' },
-      h('h1', {}, h('span', { class: 'grad' }, 'FerIDE'), ' beta v5.4'),
+      h('h1', {}, h('span', { class: 'grad' }, 'FerIDE'), ` ${S.info?.display_version || ''}`),
       h('div', { class: 'muted' }, 'Yerel modellerle çalışan, kendi bilgisayarınızda kalan yapay zeka geliştirme ortamı.'),
       h('div', { class: 'cards' },
         card('folderOpen', 'Klasör aç', 'Bir proje klasörünü çalışma alanı yap.', () => Explorer.pickWorkspace()),

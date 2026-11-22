@@ -1,6 +1,6 @@
 // Ayarlar: genel, ajan ve güvenlik, düzenleyici, ses, MCP, skill'ler, hafıza.
 import { S, saveSettings, loadSettings, restartForUpdate } from '../app.js';
-import { h, icon, toast, relTime, confirmBox, modal, renderMarkdown, fmtBytes } from '../util.js';
+import { h, icon, toast, relTime, confirmBox, modal, renderMarkdown, fmtBytes, fmtVersion } from '../util.js';
 import * as Editor from './editor.js';
 
 let tab = 'general';
@@ -43,11 +43,11 @@ function renderUpdate(sec) {
   const text = {
     idle: 'Henüz denetlenmedi.',
     checking: 'Denetleniyor…',
-    available: `FerIDE ${u.latest} yayında. Otomatik güncelleme kapalı olduğu için indirilmedi.`,
-    downloading: `FerIDE ${u.latest} indiriliyor…${pct}`,
-    installing: `FerIDE ${u.latest} doğrulanıp kuruluyor…`,
-    ready: `FerIDE ${u.ready_version} kuruldu; yeniden başlatınca geçerli olur.`,
-    up_to_date: `Güncel${u.latest ? ` (GitHub'daki en yeni sürüm ${u.latest})` : ''}.`,
+    available: `FerIDE ${fmtVersion(u.latest)} yayında. Otomatik güncelleme kapalı olduğu için indirilmedi.`,
+    downloading: `FerIDE ${fmtVersion(u.latest)} indiriliyor…${pct}`,
+    installing: `FerIDE ${fmtVersion(u.latest)} doğrulanıp kuruluyor…`,
+    ready: `FerIDE ${fmtVersion(u.ready_version)} kuruldu; yeniden başlatınca geçerli olur.`,
+    up_to_date: `Güncel${u.latest ? ` (GitHub'daki en yeni sürüm ${fmtVersion(u.latest)})` : ''}.`,
     blocked: u.message || 'Windows yeni sürümü engelledi.',
     error: u.message || 'Denetlenemedi.',
     unsupported: u.message || 'Bu kopya kendini güncelleyemiyor.',
@@ -59,7 +59,7 @@ function renderUpdate(sec) {
     h('div', { class: 'sh' }, h('h3', {}, 'Güncellemeler')),
     field('Otomatik güncelleme', 'Açıkken FerIDE, GitHub\'daki yeni sürümleri denetler (açılıştan 1 dakika sonra, sonra 6 saatte bir), arka planda indirip doğrular ve kurar; yeni sürüm yeniden başlatınca devreye girer. Kapalıyken yalnızca yeni sürüm olup olmadığına bakılır, siz "İndir ve kur"a basmadan hiçbir şey indirilmez.',
       u.updatable === false ? h('span', { class: 'small muted' }, 'Bu kopyada kullanılamaz') : check(S.settings.updates?.auto !== false, async (v) => { await saveSettings({ updates: { auto: v } }); if (v) S.rpc.call('update.check').catch(() => {}); }, 'Yeni sürümleri otomatik indir ve kur')),
-    field('Durum', `Çalışan sürüm: ${u.current || S.info?.version || ''}${u.checked_at ? ` • son denetim ${relTime(u.checked_at)}` : ''}`,
+    field('Durum', `Çalışan sürüm: ${fmtVersion(u.current || S.info?.version)}${u.checked_at ? ` • son denetim ${relTime(u.checked_at)}` : ''}`,
       h('div', { class: 'row', style: { flexWrap: 'wrap', justifyContent: 'flex-end' } },
         h('span', { class: 'small', style: { maxWidth: '440px', color: ['error', 'blocked'].includes(u.state) ? 'var(--err)' : ['ready', 'available'].includes(u.state) ? 'var(--accent)' : '' } }, busy ? icon('loader', 'spin') : null, ' ', text),
         u.state === 'ready' ? h('button', { class: 'btn sm primary', onclick: () => restartForUpdate() }, icon('refresh'), 'Yeniden başlat') : null,
@@ -140,7 +140,7 @@ function general(body) {
   body.append(h('div', { class: 'section' },
     h('div', { class: 'sh' }, h('h3', {}, 'FerIDE hakkında')),
     h('div', { class: 'kv' },
-      h('span', { class: 'k' }, 'Sürüm'), `${S.info?.display_version} (${S.info?.version})`,
+      h('span', { class: 'k' }, 'Sürüm'), S.info?.display_version || '',
       h('span', { class: 'k' }, 'Yapımcı'), 'Aytuğ AVCI',
       h('span', { class: 'k' }, 'Platform'), `${S.info?.os} ${S.info?.arch}`,
       h('span', { class: 'k' }, 'Ajan kabuğu'), S.info?.shell,
@@ -156,7 +156,9 @@ function agent(body) {
     field('En fazla adım', 'Bir görevde en fazla araç turu', select(a.max_steps, [[30, '30'], [60, '60'], [100, '100'], [200, '200'], [400, '400']], (v) => saveSettings({ agent: { max_steps: Number(v) } }))),
     field('Sıcaklık', 'Düşük: tutarlı, yüksek: yaratıcı', select(a.temperature, [[0.2, '0,2'], [0.4, '0,4'], [0.6, '0,6'], [0.8, '0,8'], [1.0, '1,0']], (v) => saveSettings({ agent: { temperature: Number(v) } }))),
     field('Komut zaman aşımı', null, select(a.command_timeout_secs, [[60, '1 dk'], [300, '5 dk'], [900, '15 dk'], [1800, '30 dk']], (v) => saveSettings({ agent: { command_timeout_secs: Number(v) } }))),
-    field('Araç çıktısı sınırı', 'Modele verilen en fazla karakter', select(a.max_tool_output_chars, [[8000, '8 bin'], [16000, '16 bin'], [32000, '32 bin'], [64000, '64 bin']], (v) => saveSettings({ agent: { max_tool_output_chars: Number(v) } })))));
+    field('Araç çıktısı sınırı', 'Modele verilen en fazla karakter', select(a.max_tool_output_chars, [[8000, '8 bin'], [16000, '16 bin'], [32000, '32 bin'], [64000, '64 bin']], (v) => saveSettings({ agent: { max_tool_output_chars: Number(v) } }))),
+    field('Düzenleme sonrası denetim', 'Ajan bir dosyayı yazınca ya da düzenleyince dosyanın diline göre hızlı bir hata denetimi çalışır ve bulunan hatalar hemen ajana bildirilir: JSON, TOML, Python, JavaScript, kabuk betikleri, Go ve Rust (rustfmt). "Hiçbir şey sorma" modunda ayrıca cargo check ve TypeScript için tsc çalışır.',
+      check(a.check_after_edit !== false, (v) => saveSettings({ agent: { check_after_edit: v } })))));
   body.append(h('div', { class: 'section' }, h('div', { class: 'sh' }, h('h3', {}, 'Proje talimatları')),
     h('div', { class: 'small muted' }, 'Çalışma alanının kökündeki FERIDE.md (ya da AGENTS.md / CLAUDE.md) dosyası her görevde ajana proje talimatı olarak verilir. Kod stili, test komutu, yasaklar gibi kalıcı kuralları buraya yazın.')));
 }

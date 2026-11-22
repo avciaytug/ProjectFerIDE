@@ -300,6 +300,7 @@ async fn download(http: &reqwest::Client, url: &str, dest: &Path, mut progress: 
 
 /// Windows yeni sürümü engellediğinde gösterilen açıklama.
 fn blocked_message(version: &str) -> String {
+    let version = crate::display_version(version);
     format!(
         "FerIDE {version} kurulamadı: Windows Akıllı Uygulama Denetimi yeni sürümü engelledi (program henüz dijital olarak \
          imzalı değil ve Windows bu sürümü henüz tanımıyor). Çalışan sürüm olduğu gibi korunuyor; otomatik güncelleme bu \
@@ -727,7 +728,7 @@ mod tests {
         // Kullanıcının ekranındaki hata: "Uygulama Denetimi ilkesi bu dosyayı engelledi. (os error 4551)".
         assert!(crate::winsec::is_policy_block(&std::io::Error::from_raw_os_error(4551)));
         assert!(!crate::winsec::is_policy_block(&std::io::Error::from_raw_os_error(2)));
-        let m = blocked_message("5.4.0-beta.19");
-        assert!(m.contains("5.4.0-beta.19") && m.contains("Akıllı Uygulama Denetimi") && m.contains("Yeniden dene"));
+        let m = blocked_message("5.4.26-beta");
+        assert!(m.contains("FerIDE v5.4.26 beta") && m.contains("Akıllı Uygulama Denetimi") && m.contains("Yeniden dene"));
     }
 }

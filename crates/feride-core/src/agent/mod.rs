@@ -4,7 +4,9 @@
 //!   kind: start | status | content | reasoning | tool_start | tool_end | approval | approval_resolved |
 //!         todos | usage | turn_saved | done
 
+pub mod checks;
 pub mod context;
+pub mod edit;
 pub mod oscmd;
 pub mod permissions;
 pub mod prompt;

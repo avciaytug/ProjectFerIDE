@@ -38,6 +38,8 @@ pub struct Core {
     pub runs: Mutex<HashMap<String, Arc<agent::Run>>>,
     pub session_allow: Mutex<HashMap<String, HashSet<String>>>,
     pub background: agent::tools::Background,
+    /// Ajanın oturum başına gördüğü dosyalar (görmeden üzerine yazmayı önler).
+    pub seen_files: agent::tools::SeenFiles,
 }
 
 impl Core {
@@ -74,6 +76,7 @@ impl Core {
             runs: Mutex::new(HashMap::new()),
             session_allow: Mutex::new(HashMap::new()),
             background: agent::tools::Background::default(),
+            seen_files: agent::tools::SeenFiles::default(),
             memory,
             deps,
             events,

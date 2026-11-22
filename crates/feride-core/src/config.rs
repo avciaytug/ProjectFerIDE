@@ -141,6 +141,8 @@ pub struct AgentSettings {
     /// auto | bash | powershell | cmd | sh
     pub shell: String,
     pub command_timeout_secs: u64,
+    /// Ajan bir dosyayı yazınca/düzenleyince dilinin denetleyicisiyle hızlı hata denetimi (bkz. agent::checks).
+    pub check_after_edit: bool,
 }
 
 impl Default for AgentSettings {
@@ -153,6 +155,7 @@ impl Default for AgentSettings {
             max_tool_output_chars: 16_000,
             shell: "auto".into(),
             command_timeout_secs: 300,
+            check_after_edit: true,
         }
     }
 }

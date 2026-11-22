@@ -1,6 +1,6 @@
 // FerIDE arayüz giriş noktası.
 import { Rpc } from './rpc.js';
-import { h, icon, toast, basename, store, modal, renderMarkdown } from './util.js';
+import { h, icon, toast, basename, store, modal, renderMarkdown, fmtVersion } from './util.js';
 import * as Explorer from './views/explorer.js';
 import * as Sessions from './views/sessions.js';
 import * as Editor from './views/editor.js';
@@ -68,6 +68,9 @@ export function showSide(id) {
 
 // ---------------------------------------------------------------- üst çubuk
 export function renderTopbar() {
+  const ver = document.getElementById('brand-ver');
+  if (ver) ver.textContent = S.info?.display_version || '';
+  document.title = S.info?.display_version ? `FerIDE ${S.info.display_version}` : 'FerIDE';
   const ws = document.getElementById('ws-chip');
   ws.innerHTML = '';
   ws.append(icon('folder'), h('span', { class: 'nowrap' }, basename(S.info?.workspace || '') || 'Klasör seç'));
@@ -124,13 +127,13 @@ export function renderStatusbar() {
   if (tps) sb.append(h('span', { class: 'item', title: 'Son turun ortalama üretim hızı' }, icon('zap'), `${tps.toFixed(1).replace('.', ',')} token/sn`));
   const up = S.update;
   if (up?.state === 'ready') {
-    sb.append(h('span', { class: 'item click', style: { color: 'var(--accent)' }, title: `FerIDE ${up.ready_version} kuruldu — yeniden başlatmak için tıklayın`, onclick: () => restartForUpdate() }, icon('refresh'), 'Güncelleme hazır'));
+    sb.append(h('span', { class: 'item click', style: { color: 'var(--accent)' }, title: `FerIDE ${fmtVersion(up.ready_version)} kuruldu — yeniden başlatmak için tıklayın`, onclick: () => restartForUpdate() }, icon('refresh'), 'Güncelleme hazır'));
   } else if (up?.state === 'available' && up.latest) {
     // Otomatik güncelleme kapalı: yalnızca haber ver, indirmeyi kullanıcı başlatır.
-    sb.append(h('span', { class: 'item click', title: `FerIDE ${up.latest} yayında — indirip kurmak için tıklayın`, onclick: () => Settings.open('general') }, icon('download'), `Yeni sürüm ${up.latest}`));
+    sb.append(h('span', { class: 'item click', title: `FerIDE ${fmtVersion(up.latest)} yayında — indirip kurmak için tıklayın`, onclick: () => Settings.open('general') }, icon('download'), `Yeni sürüm ${fmtVersion(up.latest)}`));
   } else if ((up?.state === 'downloading' || up?.state === 'installing') && up.latest) {
     const pct = up.total ? ` %${Math.floor((up.done * 100) / up.total)}` : '';
-    sb.append(h('span', { class: 'item', title: `FerIDE ${up.latest} arka planda indiriliyor` }, icon('download'), up.state === 'installing' ? 'Güncelleme kuruluyor' : `Güncelleme${pct}`));
+    sb.append(h('span', { class: 'item', title: `FerIDE ${fmtVersion(up.latest)} arka planda indiriliyor` }, icon('download'), up.state === 'installing' ? 'Güncelleme kuruluyor' : `Güncelleme${pct}`));
   }
   sb.append(h('span', { class: 'item' }, `FerIDE ${S.info?.display_version || ''}`));
 }
@@ -140,7 +143,7 @@ export function restartForUpdate() {
   const u = S.update || {};
   const loaded = S.model?.state === 'ready' ? ' Yüklü model yeni sürümde otomatik olarak yeniden yüklenir.' : '';
   modal({
-    title: `FerIDE ${u.ready_version || ''} kuruldu`,
+    title: `FerIDE ${fmtVersion(u.ready_version)} kuruldu`,
     wide: !!u.notes,
     body: h('div', { class: 'col' },
       h('div', {}, `FerIDE kapanıp yeni sürümle yeniden açılacak. Sohbetleriniz kayıtlı; devam eden bir yanıt varsa yarıda kalır.${loaded}`),
@@ -269,7 +272,7 @@ async function boot() {
     S.update = u;
     renderStatusbar();
     Settings.onUpdate?.(u);
-    if (u.state === 'ready' && was !== 'ready') toast(`FerIDE ${u.ready_version} arka planda indirildi ve kuruldu. Yeniden başlatınca geçerli olur (durum çubuğundaki "Güncelleme hazır").`, 'ok', 12000);
+    if (u.state === 'ready' && was !== 'ready') toast(`FerIDE ${fmtVersion(u.ready_version)} arka planda indirildi ve kuruldu. Yeniden başlatınca geçerli olur (durum çubuğundaki "Güncelleme hazır").`, 'ok', 12000);
   });
   S.rpc.on('agent', (ev) => {
     if (ev.kind === 'usage') { S.usage = ev; renderStatusbar(); }

@@ -160,7 +160,7 @@ function draw() {
   root.append(h('div', { class: 'inst-wrap' },
     h('div', { class: 'inst-hero' }, h('div', { class: 'logo' }, 'F'),
       h('h1', {}, upd ? 'FerIDE güncelleniyor' : 'FerIDE kurulumu'),
-      h('div', { class: 'muted' }, `Sürüm ${st.info.version}. Yönetici izni gerekmez; her şey seçtiğiniz klasörlere kurulur.`)),
+      h('div', { class: 'muted' }, `Sürüm ${st.info.display_version || st.info.version}. Yönetici izni gerekmez; her şey seçtiğiniz klasörlere kurulur.`)),
     pathField('program', 'Program klasörü', `FerIDE programı buraya kurulur (~25 MB). ${isWin ? 'Ör. C:\\Users\\…\\Programs\\FerIDE ya da D:\\FerIDE' : 'Ör. ~/.local/share/feride ya da /mnt/disk2/FerIDE'}.`,
       c.program_installed && !upd ? h('div', { class: 'tiny muted' }, 'Bu klasörde FerIDE kurulu; yeni sürümle güncellenir.') : null),
     pathField('data', 'Veri klasörü', 'Modeller, llama.cpp, ses paketi, sohbetler ve ayarlar burada durur. Büyüyebilir; yer azsa başka bir sürücü seçin.', dataExtra),

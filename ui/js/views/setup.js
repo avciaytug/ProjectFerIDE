@@ -68,7 +68,7 @@ function render() {
   const inner = h('div', { class: 'page-inner', style: { maxWidth: '900px' } });
   if (firstRun) {
     inner.append(h('div', { class: 'hero-setup' }, h('div', { class: 'logo' }, 'F'),
-      h('h2', {}, 'FerIDE beta v5.4\'e hoş geldiniz'),
+      h('h2', {}, 'FerIDE\'ye hoş geldiniz'),
       h('div', { class: 'muted' }, 'FerIDE çalışmak için gerekenleri kendisi kurar. Her şey kullanıcı klasörünüze kurulur; yönetici izni yalnızca gerekirse ve bir kez istenir.')));
   } else {
     inner.append(h('h2', {}, 'Kurulum ve tanılama'), h('div', { class: 'muted' }, 'Bağımlılıkların durumu. Eksikleri seçip tek tıkla kurabilirsiniz.'));

@@ -60,12 +60,17 @@ jobs:
           tar -czf ${{ matrix.asset }} -C dist .
           shasum -a 256 ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
       - name: Sürüm notu
+        id: notes
         shell: bash
-        run: bash scripts/release-notes.sh "${{ inputs.tag || github.ref_name }}" > release-notes.md
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          bash scripts/release-notes.sh "$TAG" > release-notes.md
+          # Yayın adı gösterim biçiminde: v5.4.25-beta → "FerIDE v5.4.25 beta"
+          echo "name=FerIDE ${TAG/-/ }" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          name: FerIDE ${{ inputs.tag || github.ref_name }}
+          name: ${{ steps.notes.outputs.name }}
           body_path: release-notes.md
           prerelease: true
           files: |
