@@ -57,7 +57,7 @@ Amaç: her işletim sisteminde aynı davranan, kurulumu kendi yapan, çökmeye d
 | `hub` | Hugging Face arama, devam ettirilebilir indirme, SHA-256 doğrulama. |
 | `deps` | Bağımlılık tespiti ve kurulumu; yönetici isteyen işler **tek seferde** toplanır. |
 | `llm` | OpenAI uyumlu akışlı istemci; yerel araç çağrısı ayrıştırma (`<tool_call>`). |
-| `agent` | Ajan döngüsü, araçlar, izin katmanı, bağlam sıkıştırma, alt ajan, kontrol noktaları. |
+| `agent` | Ajan döngüsü, araçlar, izin katmanı, bağlam yönetimi (`context.rs`: sunucunun gerçek token sayısıyla ölçüm, görev içinde kısaltma/özet, geçmişi silmeyen `compaction` kaydı; Otomatik bağlamı büyütme/küçültme `Core::grow_context` / `shrink_context`), alt ajan, kontrol noktaları. |
 | `sessions` | JSONL oturum günlüğü, başlık, yapılacaklar, geri alma noktaları. |
 | `skills` | `SKILL.md` dosyaları tek doğru kaynak; veritabanı kopyası yok. |
 | `memory` | Aegis hafıza: SQLite + FTS5 (v5.3.8 deneyimleri taşınır). |

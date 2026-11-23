@@ -21,6 +21,9 @@ Windows, Linux ve macOS'ta aynı davranış.
   işlemler her modda onayınıza gelir.
 - **Model Merkezi:** bellek-farkında başlatma planı (GPU / GPU+RAM / MoE uzmanları RAM'de / CPU), Hugging Face'ten
   devam ettirilebilir ve doğrulanmış indirme, görsel adaptörü (mmproj) eşleştirme.
+- **Uzun görevler:** bağlam dolunca görev durmaz. "Otomatik" bağlam bellek yettikçe modelin sınırına kadar büyür
+  (ör. 128K → 256K) ve yeni sohbette küçülür; büyüyemezse eski konuşma görevin ortasında da kısaltılır ya da modelin
+  yazdığı bir çalışma özetiyle değiştirilir. Sohbet geçmişi silinmez.
 - **IDE:** gezgin, git durumu, CodeMirror düzenleyici, gerçek terminal, model günlüğü.
 - **Sohbet:** mesaj kutusunun altında düşünme aç/kapat ve model seçici; her yanıtta girdi/çıktı tokenları ve token/sn.
 - **Canlı sesli sohbet (isteğe bağlı):** Gemini Live benzeri, araya girilebilen, tamamen yerel sesli konuşma

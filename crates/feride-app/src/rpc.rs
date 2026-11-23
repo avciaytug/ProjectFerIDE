@@ -332,9 +332,16 @@ pub async fn handle(st: &AppState, method: &str, p: Value) -> Result<Value> {
         "chat.load" => {
             let id = p_str(&p, "id")?;
             let cps: Vec<Value> = core.sessions.checkpoints(id).into_iter().map(|(t, f)| json!({"turn": t, "files": f})).collect();
+            // Sıkıştırma kayıtlarının modele giden kopyası arayüze gönderilmez (geçmişin tamamı zaten listede).
+            let mut messages = core.sessions.messages(id)?;
+            for m in messages.iter_mut().filter(|m| m["role"] == "compaction") {
+                if let Some(o) = m.as_object_mut() {
+                    o.remove("messages");
+                }
+            }
             json!({
                 "meta": core.sessions.meta(id)?,
-                "messages": core.sessions.messages(id)?,
+                "messages": messages,
                 "todos": core.sessions.todos(id),
                 "checkpoints": cps,
                 "running": core.runs.lock().unwrap().contains_key(id),
@@ -547,5 +554,5 @@ fn start_request(p: &Value, s: &feride_core::config::Settings) -> Result<StartRe
         None => s.model.compute_mode,
     };
     let ctx = p["ctx"].as_u64().map(|c| c as u32).unwrap_or(s.model.context);
-    Ok(StartRequest { model, mode, ctx })
+    Ok(StartRequest { model, mode, ctx, auto_base: None })
 }

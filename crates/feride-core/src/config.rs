@@ -154,6 +154,7 @@ impl Default for ProviderSettings {
 #[serde(default)]
 pub struct AgentSettings {
     pub permission_mode: PermissionMode,
+    /// Bir görevde en fazla model adımı; 0 = sınırsız.
     pub max_steps: u32,
     pub temperature: f32,
     pub thinking: bool,

@@ -119,7 +119,15 @@ export function renderStatusbar() {
   sb.append(spacer);
   if (S.model?.state === 'ready') {
     if (S.model.placement) sb.append(h('span', { class: 'item', title: S.model.summary || '' }, icon('cpu'), placementLabel(S.model.placement)));
-    if (S.model.ctx) sb.append(h('span', { class: 'item' }, `Bağlam ${Math.round(S.model.ctx / 1024)}K`));
+    if (S.model.ctx) {
+      const grown = S.model.auto_ctx && S.model.base_ctx && S.model.ctx > S.model.base_ctx;
+      sb.append(h('span', {
+        class: 'item',
+        title: S.model.auto_ctx
+          ? `Otomatik bağlam${grown ? `: uzun görev için ${Math.round(S.model.base_ctx / 1024)}K'dan büyütüldü` : ''}. Bellek elverdikçe büyür, yeni sohbette küçülür; sınıra gelince eski konuşma özetlenir, görev durmaz.`
+          : 'Sabit bağlam (Model Merkezi → Bağlam boyutu). Sınıra gelince eski konuşma özetlenir, görev durmaz.',
+      }, `Bağlam ${Math.round(S.model.ctx / 1024)}K${grown ? ' (oto)' : ''}`));
+    }
   }
   if (S.usage?.prompt_tokens && S.usage?.ctx) {
     const pct = Math.round((S.usage.prompt_tokens / S.usage.ctx) * 100);

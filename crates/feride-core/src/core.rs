@@ -42,6 +42,8 @@ pub struct Core {
     pub seen_files: agent::tools::SeenFiles,
     /// FerIDE'nin kontrol ettiği gerçek tarayıcı.
     pub browser: Arc<crate::browser::BrowserManager>,
+    /// Otomatik bağlamı en son büyüten sohbet (aynı sohbette küçültülmez; önbelleği korunur).
+    ctx_grown_for: Mutex<Option<String>>,
 }
 
 impl Core {
@@ -80,6 +82,7 @@ impl Core {
             background: agent::tools::Background::default(),
             seen_files: agent::tools::SeenFiles::default(),
             browser: Arc::new(crate::browser::BrowserManager::new(paths.clone(), events.clone())),
+            ctx_grown_for: Mutex::new(None),
             memory,
             deps,
             events,
@@ -105,7 +108,7 @@ impl Core {
                 let me = Arc::clone(self);
                 tokio::spawn(async move {
                     let st = me.settings();
-                    let _ = me.llama.start(&st, StartRequest { model: m, mode: st.model.compute_mode, ctx: st.model.context }).await;
+                    let _ = me.llama.start(&st, StartRequest { model: m, mode: st.model.compute_mode, ctx: st.model.context, auto_base: None }).await;
                 });
             }
         }
@@ -210,7 +213,7 @@ impl Core {
                 let ss = s.clone();
                 let sel = selected.clone();
                 tokio::spawn(async move {
-                    let _ = me.llama.start(&ss, StartRequest { model: sel, mode: ss.model.compute_mode, ctx: ss.model.context }).await;
+                    let _ = me.llama.start(&ss, StartRequest { model: sel, mode: ss.model.compute_mode, ctx: ss.model.context, auto_base: None }).await;
                 });
                 if tokio::time::timeout(std::time::Duration::from_secs(1800), rx.changed()).await.is_err() {
                     anyhow::bail!("Model yüklenmesi çok uzun sürdü.");
@@ -233,6 +236,107 @@ impl Core {
         Ok((LlmClient::new(&base, &name, None), st.ctx.unwrap_or(16384), st.vision))
     }
 
+    /// Çalışan yerel model "Otomatik" bağlamla mı açık ve bağlamı yeniden boyutlamak güvenli mi? Başka bir sohbet de
+    /// modeli kullanıyorsa yeniden başlatma onun isteğini keserdi.
+    fn resizable(&self) -> Option<crate::llama::ModelStatus> {
+        let s = self.settings();
+        if s.provider.kind != "local" || s.model.context != 0 {
+            return None;
+        }
+        let st = self.llama.status();
+        if st.state != "ready" || !st.auto_ctx || st.ctx.is_none() || st.model_path.is_none() {
+            return None;
+        }
+        if self.runs.lock().unwrap().len() > 1 {
+            return None;
+        }
+        Some(st)
+    }
+
+    fn client_for(st: &crate::llama::ModelStatus) -> Option<(LlmClient, i64)> {
+        let base = st.base_url.clone()?;
+        let name = st.model_name.clone().unwrap_or_else(|| "local".into());
+        Some((LlmClient::new(&base, &name, None), st.ctx?))
+    }
+
+    /// Otomatik bağlamda: `need` tokenlık istem mevcut bağlama sığmıyorsa ve bellek elveriyorsa modeli daha büyük
+    /// bağlamla yeniden başlatır (modelin eğitim sınırına kadar). Dönüş: yeni bağlantı ve bağlam boyu; büyütülemediyse
+    /// `None` (ajan o zaman eski konuşmayı özetler).
+    pub async fn grow_context(
+        self: &Arc<Self>,
+        session: &str,
+        need: i64,
+        on_status: &(dyn Fn(String) + Send + Sync),
+    ) -> Option<(LlmClient, i64)> {
+        let st = self.resizable()?;
+        let (cur, model) = (st.ctx?, st.model_path.clone()?);
+        let base = st.base_ctx.unwrap_or(cur);
+        let m = model.clone();
+        let info = tokio::task::spawn_blocking(move || crate::gguf::read(&m)).await.ok().flatten()?;
+        let train = info.context_length as i64;
+        let s = self.settings();
+        let mut target = None;
+        for c in growth_candidates(cur, need, train) {
+            let req = StartRequest { model: model.clone(), mode: s.model.compute_mode, ctx: c as u32, auto_base: Some(base) };
+            let Ok((plan, _, _)) = self.llama.preview_plan(&s, &req).await else { continue };
+            // Sığmalı, istenen bağlamı tam vermeli ve yerleşim değişmemeli (GPU'dan RAM'e kaymak modeli çok yavaşlatır).
+            if plan.can_start() && plan.ctx >= c && Some(&plan.placement) == st.placement.as_ref() {
+                target = Some(c);
+                break;
+            }
+        }
+        let Some(target) = target else {
+            tracing::info!("bağlam büyütülemedi: gereken ~{need}, şu an {cur}, model sınırı {train} (bellek ya da sınır yetmiyor)");
+            return None;
+        };
+        on_status(format!(
+            "Bağlam büyütülüyor: {}K → {}K (bellek yeterli). Model yeniden yükleniyor; ardından geçmiş yeniden işlenecek…",
+            cur / 1024,
+            target / 1024
+        ));
+        tracing::info!("otomatik bağlam büyütülüyor: {cur} → {target} (gereken ~{need})");
+        let req = StartRequest { model: model.clone(), mode: s.model.compute_mode, ctx: target as u32, auto_base: Some(base) };
+        match self.llama.restart(&s, req).await {
+            Ok(new) if new.state == "ready" => {
+                *self.ctx_grown_for.lock().unwrap() = Some(session.to_string());
+                Self::client_for(&new)
+            }
+            other => {
+                tracing::warn!("bağlam büyütülemedi: {:?}", other.err());
+                on_status("Bağlam büyütülemedi; model önceki bağlamla yeniden açılıyor…".into());
+                let back = StartRequest { model, mode: s.model.compute_mode, ctx: cur as u32, auto_base: Some(base) };
+                let _ = self.llama.restart(&s, back).await;
+                None
+            }
+        }
+    }
+
+    /// Otomatik bağlam bir görev için büyütüldüyse ve şimdi başka, küçük bir sohbet başlıyorsa modeli taban bağlamla
+    /// yeniden açar: büyük bağlamın belleği serbest kalır. Aynı sohbette küçültülmez (önbelleği boşa gitmesin).
+    pub async fn shrink_context(
+        self: &Arc<Self>,
+        session: &str,
+        need: i64,
+        on_status: &(dyn Fn(String) + Send + Sync),
+    ) -> Option<(LlmClient, i64)> {
+        let st = self.resizable()?;
+        let (cur, base) = (st.ctx?, st.base_ctx?);
+        if cur <= base || need > base / 2 || self.ctx_grown_for.lock().unwrap().as_deref() == Some(session) {
+            return None;
+        }
+        let s = self.settings();
+        on_status(format!("Bağlam küçültülüyor: {}K → {}K (yeni sohbet; büyük bağlamın belleği serbest bırakılıyor)…", cur / 1024, base / 1024));
+        tracing::info!("otomatik bağlam küçültülüyor: {cur} → taban");
+        let req = StartRequest { model: st.model_path.clone()?, mode: s.model.compute_mode, ctx: 0, auto_base: None };
+        match self.llama.restart(&s, req).await {
+            Ok(new) if new.state == "ready" => {
+                *self.ctx_grown_for.lock().unwrap() = None;
+                Self::client_for(&new)
+            }
+            _ => None,
+        }
+    }
+
     pub fn shutdown(&self) {
         tracing::info!("FerIDE kapanıyor");
         for r in self.runs.lock().unwrap().values() {
@@ -244,5 +348,37 @@ impl Core {
         self.mcp.stop_all();
         self.voice.shutdown();
         self.llama.shutdown();
+    }
+}
+
+/// Otomatik bağlamı büyütürken denenecek boylar (büyükten küçüğe), modelin eğitim sınırına kadar: ihtiyacın 1,5 katı ya
+/// da iki katı (sık yeniden yüklemeyi önler); o sığmazsa bir buçuk katı. Bellek bir anda modelin en büyük bağlamına
+/// ayrılmaz, adım adım büyür. Boy, gereken istem + çıktı payını almıyorsa aday olmaz (büyütmek işe yaramaz, özetlenir).
+pub fn growth_candidates(cur: i64, need: i64, train: i64) -> Vec<i64> {
+    use crate::agent::context::out_reserve;
+    let round = |v: i64| (v + 8191) / 8192 * 8192;
+    let mut cands = vec![round((need * 3 / 2).max(cur * 2)).min(train), round(cur * 3 / 2).min(train)];
+    cands.retain(|c| *c > cur && *c <= train && *c >= need + out_reserve(*c));
+    cands.sort_unstable_by(|a, b| b.cmp(a));
+    cands.dedup();
+    cands
+}
+
+#[cfg(test)]
+mod tests {
+    use super::growth_candidates;
+
+    #[test]
+    fn context_grows_stepwise_up_to_the_model_limit() {
+        // Kullanıcının durumu: 128K doldu, model 256K destekliyor → önce 256K, sığmazsa 192K.
+        assert_eq!(growth_candidates(131072, 120_000, 262144), vec![262144, 196608]);
+        // Model zaten sınırında: büyütülmez (özetlenir).
+        assert!(growth_candidates(262144, 250_000, 262144).is_empty());
+        // Çok büyük sınırlı modelde bir anda en büyüğüne atlanmaz.
+        assert_eq!(growth_candidates(131072, 120_000, 1_048_576)[0], 262144);
+        // İhtiyaç iki katı aşıyorsa 1,5 katına göre (ör. sabit taban yüklü uzun bir sohbet açılınca).
+        assert_eq!(growth_candidates(24576, 60_000, 131072)[0], 90112);
+        // Modelin sınırı ihtiyacı karşılamıyorsa aday yok.
+        assert!(growth_candidates(131072, 255_000, 262144).is_empty());
     }
 }

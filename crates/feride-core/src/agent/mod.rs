@@ -62,6 +62,8 @@ pub struct UsageTotals {
     /// Son istemin işlenme hızı (token/sn).
     pub prompt_tps: Option<f64>,
     pub ctx: i64,
+    /// Gerçek token / kaba tahmin oranı (bağlam ölçeri; sonraki turlar buradan başlar).
+    pub ratio: Option<f64>,
 }
 
 impl UsageTotals {
@@ -259,13 +261,24 @@ async fn run_turn(core: &Arc<Core>, run: &Arc<Run>, text: String, images: Vec<St
         vision,
         run: run.clone(),
     };
+    // Bağlam ölçeri önceki turun ölçtüğü orandan başlar.
+    let ratio = history.iter().rev().find_map(|m| m["usage"]["ratio"].as_f64());
+    run.usage.lock().unwrap().ratio = ratio;
     let mut messages = base_messages(core, &settings, &workspace, &shell, &llm.model, history, &text, run.voice);
-    messages.push(umsg);
+    context::push_user(&mut messages, umsg);
 
-    let reason = agent_loop(&ctx, &mut messages, false).await?;
+    // Otomatik bağlam başka bir sohbet için büyütülmüştü ve bu sohbet küçükse: belleği geri ver.
+    if llm.is_local() {
+        let meter = ratio.map(context::Meter::with_ratio).unwrap_or_default();
+        let need = meter.tokens(&messages, context::tools_tokens(&tool_specs_for(core, false, true)));
+        if let Some((l, c)) = core.shrink_context(&sid, need, &status).await {
+            note(&ctx, format!("Bağlam küçültüldü: {}K → {}K (büyük bağlamın belleği serbest bırakıldı).", n_ctx / 1024, c / 1024));
+            *ctx.llm.write().unwrap() = l;
+            ctx.n_ctx.store(c, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
-    // Bağlam sıkıştırıldıysa kalıcı geçmişi de güncelle (sistem mesajı hariç).
-    Ok(reason)
+    agent_loop(&ctx, &mut messages, false).await
 }
 
 /// Sistem istemi + modele gidecek geçmiş. Ana tur ve ön ısıtma aynı içeriği üretmeli ki llama-server
@@ -304,15 +317,8 @@ fn base_messages(
         voice,
     });
     let mut messages = vec![json!({"role": "system", "content": system})];
-    // Yalnızca arayüz için saklanan alanlar (düşünce, token kullanımı, ses işareti) modele gönderilmez.
-    messages.extend(history.into_iter().map(|mut m| {
-        if let Some(o) = m.as_object_mut() {
-            o.remove("reasoning");
-            o.remove("usage");
-            o.remove("voice");
-        }
-        m
-    }));
+    // Geçmiş: bağlam sıkıştırıldıysa son sıkıştırma kaydından itibaren; arayüze özel alanlar ve notlar modele gitmez.
+    messages.extend(context::model_view(history));
     context::elide_browser(&mut messages);
     messages
 }
@@ -389,6 +395,87 @@ async fn model_server_down(core: &Core) -> bool {
     false
 }
 
+/// Arayüzde sohbetin akışında görünen kalıcı not (ör. "Bağlam büyütüldü"). Modele gitmez.
+fn note(ctx: &ToolCtx, text: String) {
+    if ctx.depth > 0 {
+        return;
+    }
+    let rec = json!({"role": "note", "text": text, "at": crate::util::now_iso()});
+    let _ = ctx.core.sessions.append(&ctx.session_id, &rec);
+    emit(&ctx.core, &ctx.session_id, "note", json!({"text": text}));
+}
+
+/// Ajanın kendi eklediği kullanıcı mesajı (ör. yarıda kesilen yanıttan sonra "devam et"). Arayüzde not olarak görünür.
+fn push_auto_user(ctx: &ToolCtx, messages: &mut Vec<Value>, text: &str) {
+    let merged = messages.last().is_some_and(|m| m["role"] == "user");
+    context::push_user(messages, json!({"role": "user", "content": text}));
+    if ctx.depth == 0 {
+        if !merged {
+            let _ = ctx.core.sessions.append(&ctx.session_id, &json!({"role": "user", "content": text, "auto": true}));
+            let _ = ctx.core.sessions.touch(&ctx.session_id, |m| m.message_count += 1);
+        }
+        emit(&ctx.core, &ctx.session_id, "note", json!({"text": "Yanıt uzunluk sınırına takılıp yarıda kesildi; ajan kaldığı yerden devam ediyor."}));
+    }
+}
+
+/// Yanıt sınıra takılıp yarıda kesilince modele eklenen mesaj.
+const CONTINUE_NUDGE: &str = "[FerIDE] Önceki yanıtın uzunluk sınırına takılıp yarıda kesildi (bağlam yer açmak için \
+düzenlendi). Görevi bitirmedin: kaldığın yerden devam et. Uzun içerikleri parçalara böl.";
+
+/// Bir sonraki model adımı için bağlamda yer açar: Otomatik bağlamda bellek elverirse bağlamı büyütür, yoksa eski
+/// konuşmayı sıkıştırır. `overflow`: sunucu istemin sığmadığını bildirdi (tahmin ne derse desin yer aç).
+/// Dönüş: bir şey değişti mi. Yalnızca iptal hata döndürür.
+async fn make_room(
+    ctx: &ToolCtx,
+    messages: &mut Vec<Value>,
+    tool_specs: &[Value],
+    meter: &context::Meter,
+    overflow: bool,
+    status: &(dyn Fn(String) + Send + Sync),
+) -> Result<bool, crate::llm::LlmError> {
+    let tools_est = context::tools_tokens(tool_specs);
+    let n_ctx = ctx.n_ctx();
+    let need = meter.tokens(messages, tools_est);
+    if !overflow && need <= n_ctx - context::out_reserve(n_ctx) {
+        return Ok(false);
+    }
+    // 1) Otomatik bağlam ve yeterli bellek: bağlamı büyüt, konuşma olduğu gibi kalsın.
+    if ctx.llm().is_local() {
+        if let Some((llm, new_ctx)) = ctx.core.grow_context(&ctx.session_id, need, status).await {
+            *ctx.llm.write().unwrap() = llm;
+            ctx.n_ctx.store(new_ctx, std::sync::atomic::Ordering::Relaxed);
+            note(ctx, format!("Bağlam büyütüldü: {}K → {}K. Bellek yettiği için konuşma olduğu gibi korunuyor.", n_ctx / 1024, new_ctx / 1024));
+            if need <= new_ctx - context::out_reserve(new_ctx) {
+                return Ok(true);
+            }
+        }
+    }
+    // 2) Eski konuşmayı kısalt ya da özetle.
+    let todos = if ctx.depth == 0 {
+        ctx.core
+            .sessions
+            .todos(&ctx.session_id)
+            .iter()
+            .map(|t| format!("- [{}] {}", if t.status == "completed" { "x" } else if t.status == "in_progress" { "~" } else { " " }, t.content))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        String::new()
+    };
+    let inp = context::CompactInput { n_ctx: ctx.n_ctx(), tools: tool_specs, thinking: ctx.settings.agent.thinking, todos, overflow };
+    let Some(c) = context::compact(messages, &inp, meter, &ctx.llm(), &ctx.cancel, status).await? else {
+        return Ok(false);
+    };
+    tracing::info!("bağlam sıkıştırıldı ({}): {} → {} token", c.kind, c.before, c.after);
+    if ctx.depth == 0 {
+        let _ = ctx.core.sessions.append(&ctx.session_id, &c.record(messages));
+        emit(&ctx.core, &ctx.session_id, "compacted", json!({
+            "compaction": {"kind": c.kind, "summary": c.summary, "before": c.before, "after": c.after}
+        }));
+    }
+    Ok(true)
+}
+
 /// Asıl döngü. `messages[0]` sistem mesajı. Ana ajan ve alt ajan aynı döngüyü kullanır.
 /// Ana ajanda üretilen her mesaj oturuma eklenir.
 async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool) -> anyhow::Result<String> {
@@ -396,8 +483,13 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
     let sid = &ctx.session_id;
     let is_main = ctx.depth == 0;
     let tool_specs = tool_specs_for(core, explore_only, is_main);
-    let reserve = context::tools_tokens(&tool_specs) + 4096;
-    let max_steps = if is_main { ctx.settings.agent.max_steps } else { 40 };
+    let tools_est = context::tools_tokens(&tool_specs);
+    // 0 = sınırsız: görev bitince, kullanıcı durdurunca ya da döngü algılanınca biter.
+    let max_steps = match (is_main, ctx.settings.agent.max_steps) {
+        (false, _) => 40,
+        (true, 0) => u32::MAX,
+        (true, n) => n,
+    };
     let mut recent_calls: Vec<String> = vec![];
     let mut compacted = false;
     let status = |s: String| {
@@ -405,25 +497,27 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
             emit(core, sid, "status", json!({"text": s}))
         }
     };
+    let mut meter = ctx.run.usage.lock().unwrap().ratio.map(context::Meter::with_ratio).unwrap_or_default();
 
     let mut restarts = 0u32;
+    // Art arda bağlam aşımı ve yarıda kesilen yanıt sayıları (sonsuz döngüye girmesin).
+    let mut overflows = 0u32;
+    let mut cuts = 0u32;
     for step in 1..=max_steps {
         if ctx.cancel.is_cancelled() {
             return Ok("cancelled".into());
         }
+        context::elide_browser(messages);
+        match make_room(ctx, messages, &tool_specs, &meter, false, &status).await {
+            Ok(changed) => compacted |= changed,
+            Err(_) => return Ok("cancelled".into()),
+        }
         let llm = ctx.llm();
         let n_ctx = ctx.n_ctx();
-        context::elide_browser(messages);
-        if context::fit(messages, n_ctx, reserve, &llm, &ctx.cancel, &status).await {
-            compacted = true;
-            if is_main {
-                let _ = core.sessions.rewrite(sid, &messages[1..]);
-            }
-        }
         let opts = CompleteOptions {
             tools: &tool_specs,
             temperature: ctx.settings.agent.temperature,
-            max_tokens: 8192,
+            max_tokens: context::step_max_tokens(llm.is_local(), n_ctx, meter.tokens(messages, tools_est)),
             thinking: ctx.settings.agent.thinking,
         };
         let mut on_delta = |d: Delta| {
@@ -439,6 +533,21 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
         let turn = match llm.complete(messages, &opts, &ctx.cancel, &mut on_delta).await {
             Ok(t) => t,
             Err(crate::llm::LlmError::Cancelled) => return Ok("cancelled".into()),
+            Err(crate::llm::LlmError::ContextOverflow { n_prompt, n_ctx: server_ctx, message }) if overflows < 3 => {
+                // İstem sığmadı (tahmin eksik kaldı ya da tek bir dev çıktı geldi): ölçeri düzelt, yer aç, adımı yinele.
+                overflows += 1;
+                tracing::warn!("bağlam aşıldı ({overflows}/3): istem {n_prompt:?}, bağlam {server_ctx:?}: {message}");
+                meter.observe_overflow(n_prompt, messages, tools_est);
+                if let Some(c) = server_ctx.filter(|c| *c > 0) {
+                    ctx.n_ctx.store(c, std::sync::atomic::Ordering::Relaxed);
+                }
+                status("İstem modelin bağlamına sığmadı; yer açılıp adım yeniden deneniyor…".into());
+                match make_room(ctx, messages, &tool_specs, &meter, true, &status).await {
+                    Ok(changed) => compacted |= changed,
+                    Err(_) => return Ok("cancelled".into()),
+                }
+                continue;
+            }
             Err(e) => {
                 // Yerel model sunucusu görev sürerken kapandıysa (çöktü ya da bir komut kapattı) görevi bitirme:
                 // sunucuyu yeniden başlat ve aynı adımı tekrarla.
@@ -464,10 +573,16 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                 anyhow::bail!(e.to_string())
             }
         };
+        overflows = 0;
+        // Gerçek istem uzunluğuyla ölçeri ayarla (bu adımda gönderilen mesajlar henüz değişmedi).
+        if let Some(p) = turn.prompt_tokens {
+            meter.observe(p as i64, messages, tools_est);
+        }
         if is_main {
             let totals = {
                 let mut u = ctx.run.usage.lock().unwrap();
                 u.add(&turn, n_ctx);
+                u.ratio = Some(meter.ratio());
                 u.clone()
             };
             emit(
@@ -478,6 +593,32 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                        "tps": turn.tokens_per_second, "prompt_tps": turn.prompt_per_second,
                        "ctx": n_ctx, "step": step, "compacted": compacted, "turn": totals}),
             );
+        }
+
+        // Yanıt uzunluk sınırına (bağlam ya da adım çıktısı sınırı) takılıp yarıda kesildi mi?
+        let cut = turn.finish_reason.as_deref() == Some("length");
+        if turn.tool_calls.is_empty() && cut && cuts < 3 {
+            // Görevi bitirme: yarım metni sakla, (gerekirse) yer aç ve kaldığı yerden devam ettir.
+            cuts += 1;
+            let text = turn.content.trim().to_string();
+            if !text.is_empty() {
+                messages.push(json!({"role": "assistant", "content": text}));
+                if is_main {
+                    let mut saved = json!({"role": "assistant", "content": text});
+                    if !turn.reasoning.is_empty() {
+                        saved["reasoning"] = json!(turn.reasoning);
+                    }
+                    core.sessions.append(sid, &saved)?;
+                    let _ = core.sessions.touch(sid, |m| m.message_count += 1);
+                }
+            }
+            push_auto_user(ctx, messages, CONTINUE_NUDGE);
+            tracing::info!("yanıt yarıda kesildi ({cuts}/3); devam ettiriliyor");
+            status("Yanıt sınıra takılıp yarıda kesildi; kaldığı yerden devam ediliyor…".into());
+            continue;
+        }
+        if !turn.tool_calls.is_empty() || !cut {
+            cuts = 0;
         }
 
         if turn.tool_calls.is_empty() {
@@ -518,13 +659,25 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
             core.sessions.append(sid, &saved)?;
         }
 
-        for call in &turn.tool_calls {
+        let n_calls = turn.tool_calls.len();
+        for (ci, call) in turn.tool_calls.iter().enumerate() {
             let started = Instant::now();
             let mut images: Vec<String> = vec![];
+            // Yanıt yarıda kesildiyse son çağrının argümanları yarım kalmış olabilir: onarılmış (eksik) bir dosya içeriği
+            // yazılmasın diye yalnızca kendiliğinden geçerli JSON kabul edilir.
+            let truncated = cut && ci + 1 == n_calls;
+            let args = if truncated { call.arguments_strict() } else { call.arguments() };
             let (output, ok, ui) = if ctx.cancel.is_cancelled() {
                 ("İptal edildi.".to_string(), false, None)
             } else {
-                match call.arguments() {
+                match args {
+                    None if truncated => (
+                        "HATA: Yanıtın uzunluk sınırına takıldığı için bu araç çağrısı yarım kaldı ve çalıştırılmadı. Büyük \
+                         içerikleri parçalara böl: dosyanın bir kısmını yaz, kalanını edit_file ile ekle."
+                            .to_string(),
+                        false,
+                        None,
+                    ),
                     None => (
                         format!("HATA: Argümanlar geçerli JSON değil: {}. Aracı geçerli JSON ile tekrar çağır.", crate::util::truncate_end(&call.raw_arguments, 300)),
                         false,
@@ -534,6 +687,10 @@ async fn agent_loop(ctx: &ToolCtx, messages: &mut Vec<Value>, explore_only: bool
                         let sig = format!("{}:{}", call.name, args);
                         let repeats = recent_calls.iter().rev().take_while(|c| **c == sig).count();
                         recent_calls.push(sig);
+                        // Yalnızca son çağrılar gerekir (sınırsız adımda liste büyümesin).
+                        if recent_calls.len() > 32 {
+                            recent_calls.drain(..16);
+                        }
                         if repeats >= 4 {
                             return Ok("loop".into());
                         }

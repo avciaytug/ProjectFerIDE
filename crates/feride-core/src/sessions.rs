@@ -166,7 +166,17 @@ impl Sessions {
             let role = m["role"].as_str().unwrap_or("");
             let content = content_text(&m["content"]);
             match role {
+                "user" if m["auto"] == true => out.push_str(&format!("> _{content}_\n\n")),
                 "user" => out.push_str(&format!("## Siz\n\n{content}\n\n")),
+                "note" => out.push_str(&format!("> _{}_\n\n", m["text"].as_str().unwrap_or(""))),
+                "compaction" => {
+                    out.push_str("---\n\n_Bağlam sıkıştırıldı");
+                    if let Some(s) = m["summary"].as_str() {
+                        out.push_str(&format!("; eski kısmın özeti:_\n\n{s}\n\n---\n\n"));
+                    } else {
+                        out.push_str(" (eski araç çıktıları kısaltıldı)._\n\n---\n\n");
+                    }
+                }
                 "assistant" => {
                     if !content.trim().is_empty() {
                         out.push_str(&format!("## Feride\n\n{content}\n\n"));
@@ -304,6 +314,24 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "eski");
         assert!(!newf.exists());
         assert!(s.checkpoints(&m.id).is_empty());
+    }
+
+    #[test]
+    fn export_shows_compaction_notes_and_auto_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Sessions::new(dir.path().join("sessions"));
+        let m = s.create(None, None).unwrap();
+        s.append(&m.id, &json!({"role": "user", "content": "uzun görev"})).unwrap();
+        s.append(&m.id, &json!({"role": "compaction", "kind": "summary", "summary": "ÖZET METNİ", "messages": []})).unwrap();
+        s.append(&m.id, &json!({"role": "note", "text": "Bağlam büyütüldü: 128K → 256K."})).unwrap();
+        s.append(&m.id, &json!({"role": "user", "content": "[FerIDE] devam et", "auto": true})).unwrap();
+        s.append(&m.id, &json!({"role": "assistant", "content": "bitti"})).unwrap();
+        let md = s.export_markdown(&m.id).unwrap();
+        assert!(md.contains("## Siz\n\nuzun görev"));
+        assert!(md.contains("ÖZET METNİ"));
+        assert!(md.contains("_Bağlam büyütüldü: 128K → 256K._"));
+        assert!(!md.contains("## Siz\n\n[FerIDE]"), "otomatik mesaj kullanıcı mesajı gibi görünmemeli");
+        assert!(md.contains("## Feride\n\nbitti"));
     }
 
     #[test]

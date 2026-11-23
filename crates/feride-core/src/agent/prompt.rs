@@ -71,6 +71,8 @@ pub fn build(inp: &PromptInput) -> String {
          - Yazma/düzenleme çıktısında \"Otomatik denetim\" hata bildirirse başka işe geçmeden önce o hataları düzelt.\n\
          - Değişiklikten sonra mümkünse doğrula (derle, test et, çalıştır). Doğrulamadığın şeye \"çalışıyor\" deme.\n\
          - Aynı aracı aynı parametrelerle tekrar tekrar çağırma; sonuç değişmez.\n\
+         - Uzun görevlerde bağlam dolarsa FerIDE eski konuşmayı kısaltır ya da özetler, görev durmaz. \"[Bağlam özeti]\" ile \
+         başlayan mesaj senin önceki çalışmanın özetidir; oradan devam et. Çok uzun dosyaları tek çağrıda yazma, parçalara böl.\n\
          - Bir araç hata verirse nedenini oku, yaklaşımını değiştir.\n\
          - Göreve uyan bir skill varsa (aşağıdaki listeye bak) önce use_skill ile yükle ve talimatına uy.\n\
          - Kullanıcı hakkında kalıcı bir tercih ya da proje hakkında önemli bir bilgi öğrenirsen remember ile kaydet.\n\

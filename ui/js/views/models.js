@@ -65,7 +65,9 @@ function renderStatus() {
   if (st.state === 'ready') {
     sec.append(h('div', { class: 'row small muted', style: { marginTop: '6px', flexWrap: 'wrap' } },
       h('span', { class: 'badge accent' }, placementLabel(st.placement)),
-      h('span', { class: 'badge' }, `Bağlam ${Math.round((st.ctx || 0) / 1024)}K`),
+      h('span', { class: 'badge', title: st.auto_ctx ? 'Otomatik bağlam: gerektikçe büyür, yeni sohbette küçülür.' : 'Sabit bağlam' },
+        `Bağlam ${Math.round((st.ctx || 0) / 1024)}K`,
+        st.auto_ctx && st.base_ctx && st.ctx > st.base_ctx ? ` (otomatik büyütüldü, taban ${Math.round(st.base_ctx / 1024)}K)` : st.auto_ctx ? ' (otomatik)' : ''),
       st.vision ? h('span', { class: 'badge ok' }, 'Görsel ✓') : h('span', { class: 'badge' }, 'Görsel yok'),
       st.load_seconds ? h('span', { class: 'badge' }, `${st.load_seconds.toFixed(0)} sn'de yüklendi`) : null,
       h('span', { class: 'mono tiny' }, st.base_url || '')));
@@ -184,6 +186,9 @@ function renderRun() {
       cpu: 'Ekran kartı kullanılmaz; en uyumlu ama en yavaş.',
     }[ms.compute_mode]),
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'Bağlam boyutu', h('small', {}, 'Ajan için en az 16K önerilir')), ctxSel),
+    h('div', { class: 'tiny muted' }, Number(ms.context) === 0
+      ? 'Otomatik: başlangıçta belleğe göre seçilir (en fazla 128K). Uzun bir görev bağlamı doldurursa bellek elverdikçe modelin sınırına kadar büyütülür (model yeniden yüklenir), yeni bir sohbette yeniden küçülür. Büyütülemezse eski konuşma özetlenir; görev bağlam yüzünden durmaz.'
+      : 'Sabit bağlam: model hep bu boyda açılır. Sınıra gelince eski konuşma özetlenir; görev durmaz. Bağlamın gerektikçe büyümesi için "Otomatik"i seçin.'),
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'Açılışta başlat'), h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: ms.auto_start, onchange: (e) => saveSettings({ model: { auto_start: e.target.checked } }) }), 'Seçili modeli FerIDE açılınca yükle')),
     h('div', { class: 'field' }, h('div', { class: 'lbl' }, 'llama.cpp derlemesi', h('small', {}, 'Değiştirince yeniden kurun')), h('div', { class: 'row' }, backend,
       h('button', { class: 'btn sm', onclick: (e) => installLlama(e.currentTarget) }, icon('refresh'), 'Kur / güncelle'))),

@@ -1,5 +1,48 @@
 # Sürüm notları
 
+## v5.4.27 beta — Uzun görevler bağlam dolunca durmuyor; Otomatik bağlam bellekle büyüyüp küçülüyor
+
+**Bağlam dolunca görev durmuyor**
+
+- Uzun bir görevde modelin bağlamı dolunca ajan artık durmuyor. Önceden sıkıştırma yalnızca kullanıcı mesajlarından
+  kesebiliyordu. Bu yüzden saatlerce süren tek bir görevin içi küçültülemiyordu; bağlam dolunca model yanıtın ortasında
+  kesiliyor, görev "uzunluk sınırı" ile bitiyordu. Artık görevin ortasında da kesiliyor:
+  - Önce eski büyük araç çıktıları ve dosya içerikleri kısaltılıyor.
+  - Bu yetmezse eski kısım, modelin kendi yazdığı bir çalışma özetiyle değiştiriliyor. Kullanıcının son isteği,
+    yapılacaklar listesi ve son adımlar birebir korunuyor; görev kaldığı yerden sürüyor.
+- Özet, sunucunun önbelleğini kullanan bir istekle yazılıyor: geçmiş yeniden işlenmiyor, yalnızca özet talimatı
+  ekleniyor. Önceki özetler kesilmiş (yarım) kalabiliyordu.
+- Bağlam doluluğu artık modelin bildirdiği gerçek token sayısıyla ölçülüyor. Önceki kaba tahmin kodda ve İngilizce
+  metinde %25'ten fazla eksik kalabiliyordu: FerIDE bağlamı "%85" sanırken bağlam doluyordu.
+- Yanıt sınıra takılıp yarıda kesilirse görev bitmiyor; ajan kaldığı yerden devam ediyor. Yarıda kalan bir araç çağrısı
+  (ör. yarım bir dosya içeriği) çalıştırılmıyor.
+- Sunucu "istem bağlama sığmıyor" derse görev hatayla bitmiyor; yer açılıp adım yeniden deneniyor.
+- Ayarlar → Ajan ve güvenlik → "En fazla adım"a "1000" ve "Sınırsız" eklendi. Sınırsızda görev yalnızca bitince,
+  siz durdurunca ya da ajan aynı işlemi art arda tekrarlayıp döngüye girince duruyor.
+- Sohbet geçmişi artık silinmiyor. Önceden sıkıştırma sohbet dosyasını yeniden yazıp eski mesajları kalıcı olarak
+  siliyordu. Şimdi geçmişin tamamı duruyor. Sohbette "Bağlam doldu…" ayracı ve "Özeti göster" bağlantısı görünüyor;
+  model bundan sonra özeti ve son adımları görüyor.
+
+**Otomatik bağlam büyüyüp küçülüyor**
+
+- Uzun bir görev bağlamı doldurursa ve bellek yetiyorsa model daha büyük bağlamla yeniden yükleniyor; konuşma
+  özetlenmeden sürüyor. Bağlam iki katına çıkıyor, en fazla modelin sınırına kadar (ör. 128K → 256K).
+- Yerleşim değişmiyor: model GPU'dan RAM'e kaydırılmıyor. Bellek yetmezse bağlam büyütülmüyor; eski konuşma
+  özetleniyor.
+- Büyütülen bağlam, başka bir (küçük) sohbete geçilince taban boyuna küçültülüyor ve büyük bağlamın belleği serbest
+  kalıyor. Aynı sohbette küçültülmüyor; önbelleği boşa gitmiyor.
+- Büyütülen bağlam durum çubuğunda "Bağlam 256K (oto)", Model Merkezi'nde "otomatik büyütüldü, taban 128K" olarak
+  görünüyor; sohbette de "Bağlam büyütüldü: 128K → 256K" notu çıkıyor.
+
+**Uzun istemler**
+
+- Uzun bir geçmiş yeniden işlenirken (ör. bağlam büyütüldükten sonra) ilerleme gösteriliyor:
+  "İstem işleniyor: 52K / 115K token (%45), ~4 dk kaldı".
+- Yavaş donanımda ~50K tokenı aşan istemler "Model 5 dakikadır yanıt üretmiyor" hatasıyla kesiliyordu. İlk yanıt için
+  artık 60 dakikaya kadar bekleniyor; ilerleme bildirimi bağlantıyı zaten canlı tutuyor.
+- Bir adımın en uzun çıktısı 8K'dan bağlamda kalan yere (en fazla 32K) çıktı. Düşünen modeller büyük dosyaları
+  yazarken yarıda kesilmiyor.
+
 ## v5.4.26 beta — Tarayıcı: ajan artık gerçek bir tarayıcıyı kullanabiliyor
 
 **Tarayıcı**

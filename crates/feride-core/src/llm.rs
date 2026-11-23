@@ -33,6 +33,17 @@ impl ToolCall {
         }
     }
 
+    /// Onarmadan çözer: yalnızca kendiliğinden geçerli bir JSON nesnesi kabul edilir (yarıda kesilen yanıtta onarılmış
+    /// argüman, eksik bir dosya içeriği olabilir).
+    pub fn arguments_strict(&self) -> Option<Value> {
+        let raw = self.raw_arguments.trim();
+        match serde_json::from_str::<Value>(raw) {
+            Ok(v @ Value::Object(_)) => Some(v),
+            Ok(Value::String(s)) => serde_json::from_str::<Value>(&s).ok().filter(|v| v.is_object()),
+            _ => None,
+        }
+    }
+
     pub fn to_payload(&self) -> Value {
         // Geçersiz JSON'u sunucuya geri göndermek llama-server'da 500 hatası doğurur.
         let args = match self.arguments() {
@@ -76,6 +87,8 @@ pub struct Turn {
 pub enum LlmError {
     Cancelled,
     Http { status: u16, message: String },
+    /// İstem modelin bağlamına sığmadı. llama-server istemin gerçek uzunluğunu ve bağlam boyunu da bildirir.
+    ContextOverflow { message: String, n_prompt: Option<i64>, n_ctx: Option<i64> },
     Other(String),
 }
 
@@ -83,10 +96,29 @@ impl std::fmt::Display for LlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LlmError::Cancelled => write!(f, "İptal edildi"),
-            LlmError::Http { message, .. } => write!(f, "{message}"),
+            LlmError::Http { message, .. } | LlmError::ContextOverflow { message, .. } => write!(f, "{message}"),
             LlmError::Other(m) => write!(f, "{m}"),
         }
     }
+}
+
+/// Sunucu "istem bağlama sığmıyor" dediyse ayrı hata (ajan döngüsü bağlamı sıkıştırıp yeniden dener).
+fn context_overflow(status: u16, body: &str) -> Option<LlmError> {
+    let lower = body.to_lowercase();
+    let hit = matches!(status, 400 | 413 | 500)
+        && (lower.contains("exceed_context_size")
+            || lower.contains("maximum context length")
+            || (lower.contains("context") && (lower.contains("exceed") || lower.contains("too long") || lower.contains("n_ctx"))));
+    if !hit {
+        return None;
+    }
+    let j: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let e = &j["error"];
+    Some(LlmError::ContextOverflow {
+        message: describe_http_error(status, body),
+        n_prompt: e["n_prompt_tokens"].as_i64(),
+        n_ctx: e["n_ctx"].as_i64(),
+    })
 }
 impl std::error::Error for LlmError {}
 
@@ -174,6 +206,8 @@ impl LlmClient {
         if self.is_local() {
             body["cache_prompt"] = json!(true);
             body["chat_template_kwargs"] = json!({"enable_thinking": opts.thinking});
+            // Uzun istem işlenirken llama-server ilerleme bildirsin: hem arayüzde gösterilir hem de bağlantı canlı kalır.
+            body["return_progress"] = json!(true);
         }
         if !opts.tools.is_empty() {
             body["tools"] = Value::Array(opts.tools.to_vec());
@@ -195,6 +229,9 @@ impl LlmClient {
         let status = resp.status().as_u16();
         if status != 200 {
             let text = resp.text().await.unwrap_or_default();
+            if let Some(e) = context_overflow(status, &text) {
+                return Err(e);
+            }
             return Err(LlmError::Http { status, message: describe_http_error(status, &text) });
         }
 
@@ -210,14 +247,20 @@ impl LlmClient {
         let mut pending_r = String::new();
         let mut first_token: Option<Instant> = None;
         let mut predicted_ms: Option<f64> = None;
+        let mut got_chunk = false;
+        let mut last_progress: Option<Instant> = None;
 
         'outer: loop {
+            // İlk parça gelene kadar sunucu istemi işliyor: yerel modelde uzun bir geçmişin yeniden işlenmesi (ör. bağlam
+            // büyütüldükten sonra) yavaş donanımda dakikalar sürebilir. Sunucu ilerleme bildiriyorsa parçalar zaten gelir.
+            let wait = if got_chunk || !self.is_local() { 300 } else { 3600 };
             let chunk = tokio::select! {
-                c = tokio::time::timeout(Duration::from_secs(300), stream.next()) => c,
+                c = tokio::time::timeout(Duration::from_secs(wait), stream.next()) => c,
                 _ = cancel.cancelled() => return Err(LlmError::Cancelled),
             };
+            got_chunk = true;
             let chunk = match chunk {
-                Err(_) => return Err(LlmError::Other("Model 5 dakikadır yanıt üretmiyor; bağlantı kesildi.".into())),
+                Err(_) => return Err(LlmError::Other(format!("Model {} dakikadır yanıt üretmiyor; bağlantı kesildi.", wait / 60))),
                 Ok(None) => break,
                 Ok(Some(Err(e))) => return Err(LlmError::Other(format!("Akış kesildi: {e}"))),
                 Ok(Some(Ok(b))) => b,
@@ -233,6 +276,23 @@ impl LlmClient {
                     break 'outer;
                 }
                 let Ok(j) = serde_json::from_str::<Value>(data) else { continue };
+                // İstem işleme ilerlemesi (llama-server `return_progress`): yalnızca uzun istemlerde ve ~2 sn'de bir göster.
+                if let Some(p) = j.get("prompt_progress").filter(|p| p.is_object()) {
+                    let total = p["total"].as_i64().unwrap_or(0) - p["cache"].as_i64().unwrap_or(0);
+                    let done = p["processed"].as_i64().unwrap_or(0) - p["cache"].as_i64().unwrap_or(0);
+                    if total >= 4096 && done < total && last_progress.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
+                        last_progress = Some(Instant::now());
+                        let secs = p["time_ms"].as_f64().unwrap_or(0.0) / 1000.0;
+                        let eta = if done > 0 && secs > 1.0 { ((total - done) as f64 * secs / done as f64) as u64 } else { 0 };
+                        on_delta(Delta::Status(format!(
+                            "İstem işleniyor: {} / {} token (%{}){}",
+                            fmt_k(done.max(0)),
+                            fmt_k(total),
+                            done.max(0) * 100 / total,
+                            if eta >= 5 { format!(", ~{} kaldı", fmt_secs(eta)) } else { String::new() }
+                        )));
+                    }
+                }
                 if let Some(u) = j.get("usage").filter(|u| u.is_object()) {
                     turn.prompt_tokens = u["prompt_tokens"].as_u64().or(turn.prompt_tokens);
                     turn.completion_tokens = u["completion_tokens"].as_u64().or(turn.completion_tokens);
@@ -346,6 +406,26 @@ impl LlmClient {
         let mut sink = |_d: Delta| {};
         let t = self.complete(messages, &opts, cancel, &mut sink).await?;
         Ok(if t.content.trim().is_empty() { t.reasoning } else { t.content })
+    }
+}
+
+/// 52300 → "52K", 900 → "900".
+pub fn fmt_k(n: i64) -> String {
+    if n >= 10_000 {
+        format!("{}K", n / 1000)
+    } else if n >= 1000 {
+        format!("{:.1}K", n as f64 / 1000.0).replace('.', ",")
+    } else {
+        n.to_string()
+    }
+}
+
+/// 75 → "1 dk 15 sn".
+pub fn fmt_secs(s: u64) -> String {
+    if s >= 60 {
+        format!("{} dk {} sn", s / 60, s % 60)
+    } else {
+        format!("{s} sn")
     }
 }
 
@@ -520,5 +600,23 @@ mod tests {
     fn errors_translated() {
         assert!(describe_http_error(400, r#"{"error":{"message":"the request exceeds the available context size"}}"#)
             .contains("Bağlam sınırı"));
+    }
+
+    #[test]
+    fn context_overflow_is_recognised() {
+        let body = r#"{"error":{"code":400,"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error","n_prompt_tokens":140123,"n_ctx":131072}}"#;
+        match context_overflow(400, body) {
+            Some(LlmError::ContextOverflow { n_prompt, n_ctx, message }) => {
+                assert_eq!((n_prompt, n_ctx), (Some(140123), Some(131072)));
+                assert!(message.contains("Bağlam sınırı"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(context_overflow(400, r#"{"error":{"message":"This model's maximum context length is 8192 tokens"}}"#).is_some());
+        assert!(context_overflow(400, r#"{"error":{"message":"bad json"}}"#).is_none());
+        assert!(context_overflow(503, r#"{"error":{"message":"Loading model"}}"#).is_none());
+        assert_eq!(fmt_k(52300), "52K");
+        assert_eq!(fmt_k(4500), "4,5K");
+        assert_eq!(fmt_secs(75), "1 dk 15 sn");
     }
 }

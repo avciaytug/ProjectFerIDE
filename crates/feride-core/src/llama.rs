@@ -50,6 +50,10 @@ pub struct ModelStatus {
     pub started_at: Option<String>,
     pub load_seconds: Option<f64>,
     pub mmproj: Option<PathBuf>,
+    /// Bağlam "Otomatik" seçildi: FerIDE gerektikçe büyütüp küçültebilir.
+    pub auto_ctx: bool,
+    /// Otomatik bağlamın başlangıç (taban) boyu; `ctx` bundan büyükse bağlam bir görev için büyütülmüştür.
+    pub base_ctx: Option<i64>,
 }
 
 static QUANT_RE: LazyLock<Regex> =
@@ -223,7 +227,11 @@ pub struct LlamaManager {
 pub struct StartRequest {
     pub model: PathBuf,
     pub mode: ComputeMode,
+    /// 0 = Otomatik (planlayıcı belleğe göre seçer).
     pub ctx: u32,
+    /// Otomatik bağlam bir görev için büyütülüyor/geri alınıyor: `ctx` bu boyda açılır ama bağlam yine "Otomatik"
+    /// sayılır; değer tabandır (görev bitince dönülecek boy).
+    pub auto_base: Option<i64>,
 }
 
 impl LlamaManager {
@@ -355,12 +363,27 @@ impl LlamaManager {
     }
 
     pub async fn start(self: &Arc<Self>, settings: &Settings, req: StartRequest) -> anyhow::Result<ModelStatus> {
+        self.start_inner(settings, req, false).await
+    }
+
+    /// Aynı model çalışıyor olsa bile kapatıp istenen ayarla yeniden başlatır (Otomatik bağlamı büyütme/küçültme).
+    pub async fn restart(self: &Arc<Self>, settings: &Settings, req: StartRequest) -> anyhow::Result<ModelStatus> {
+        self.start_inner(settings, req, true).await
+    }
+
+    async fn start_inner(self: &Arc<Self>, settings: &Settings, req: StartRequest, force: bool) -> anyhow::Result<ModelStatus> {
+        // Test kancası: Otomatik bağlamın tabanını küçültür (bağlamın büyüyüp küçülmesini gerçek modelle hızlı denemek için).
+        let req = match std::env::var("FERIDE_TEST_AUTO_CTX").ok().and_then(|v| v.parse::<u32>().ok()) {
+            Some(v) if req.ctx == 0 => StartRequest { ctx: v, auto_base: Some(v as i64), ..req },
+            _ => req,
+        };
         let _op = self.op.lock().await;
         let cur = self.status();
-        if cur.model_path.as_deref() == Some(req.model.as_path()) && (cur.state == "ready" || cur.state == "starting") {
+        if !force && cur.model_path.as_deref() == Some(req.model.as_path()) && (cur.state == "ready" || cur.state == "starting") {
             return Ok(cur);
         }
         self.stop_locked().await;
+        let auto_ctx = req.ctx == 0 || req.auto_base.is_some();
 
         if !req.model.is_file() {
             let s = ModelStatus {
@@ -494,6 +517,8 @@ impl LlamaManager {
             summary: Some(plan.summary.clone()),
             warnings: plan.warnings.clone(),
             mmproj: mmproj.clone(),
+            auto_ctx,
+            base_ctx: if auto_ctx { req.auto_base.or(Some(plan.ctx)) } else { None },
             ..Default::default()
         });
 
@@ -561,6 +586,8 @@ impl LlamaManager {
             load_seconds: Some(started.elapsed().as_secs_f64()),
             mmproj: mmproj.clone(),
             error: None,
+            auto_ctx,
+            base_ctx: if auto_ctx { req.auto_base.or(Some(ctx)) } else { None },
         };
         self.set_status(st.clone());
         self.hw_cache.lock().unwrap().take();

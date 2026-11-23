@@ -74,8 +74,14 @@ export function updateHint() {
   const el = document.getElementById('composer-hint');
   if (!el) return;
   const m = S.model;
-  el.textContent = S.settings?.provider?.kind === 'openai' ? 'uzak model' : m?.state === 'ready' ? `${placementLabel(m.placement)} • ${Math.round((m.ctx || 0) / 1024)}K` : '';
+  el.textContent = S.settings?.provider?.kind === 'openai' ? 'uzak model' : m?.state === 'ready' ? `${placementLabel(m.placement)} • ${ctxLabel(m)}` : '';
   renderFoot();
+}
+
+/** "128K", Otomatik bağlam büyütüldüyse "256K (oto)". */
+export function ctxLabel(m) {
+  const k = `${Math.round((m?.ctx || 0) / 1024)}K`;
+  return m?.auto_ctx && m.base_ctx && m.ctx > m.base_ctx ? `${k} (oto)` : k;
 }
 
 // ---------------------------------------------------------------- alt çubuk: düşünme, model, kullanım
@@ -327,12 +333,20 @@ function renderMessages(messages) {
   msgsEl.innerHTML = '';
   live = null;
   lastUsage = null;
-  const userTurns = messages.filter((m) => m.role === 'user').length;
+  // Ajanın kendi eklediği kullanıcı mesajları (auto) tur sayılmaz.
+  const userTurns = messages.filter((m) => m.role === 'user' && !m.auto).length;
   let turnNo = (meta?.turns || userTurns) - userTurns;
   let block = null;
   const cards = new Map();
+  const inBlock = (el) => { if (block) block.body.append(el); else msgsEl.append(el); };
   for (const m of messages) {
-    if (m.role === 'user') {
+    if (m.role === 'compaction') {
+      inBlock(compactionEl(m));
+    } else if (m.role === 'note') {
+      inBlock(noteEl(m.text));
+    } else if (m.role === 'user' && m.auto) {
+      inBlock(noteEl(AUTO_NOTE));
+    } else if (m.role === 'user') {
       turnNo += 1;
       block = null;
       msgsEl.append(userBubble(m, turnNo));
@@ -355,6 +369,23 @@ function renderMessages(messages) {
   }
   if (!messages.length) renderEmpty();
   renderFoot();
+}
+
+const AUTO_NOTE = 'Yanıt uzunluk sınırına takılıp yarıda kesildi; ajan kaldığı yerden devam etti.';
+
+function noteEl(text) {
+  return h('div', { class: 'status-line note' }, icon('info'), h('span', {}, text));
+}
+
+/** Bağlam sıkıştırma ayracı: geçmiş silinmez, model bundan sonra özeti ve son adımları görür. */
+function compactionEl(c) {
+  const what = c.kind === 'summary'
+    ? 'Bağlam doldu; eski kısım bir çalışma özetiyle değiştirildi'
+    : 'Bağlam doldu; eski araç çıktıları ve dosya içerikleri kısaltıldı';
+  const nums = c.before && c.after ? ` (~${fmtTok(c.before)} → ~${fmtTok(c.after)} token)` : '';
+  return h('div', { class: 'compaction', title: 'Sohbet geçmişinin tamamı burada duruyor; model bundan sonra özeti ve son adımları görüyor. Görev durmadan devam etti.' },
+    h('div', { class: 'line' }, icon('layers'), h('span', {}, `${what}${nums}. Görev kesintisiz sürdü.`)),
+    c.summary ? h('details', {}, h('summary', {}, 'Özeti göster'), h('div', { class: 'sum' }, renderMarkdown(c.summary))) : null);
 }
 
 function isOkOutput(content) {
@@ -552,6 +583,13 @@ function handleEvent(ev) {
       live.status.append(icon('loader', 'spin'), 'Devam ediyor…');
       break;
     }
+    case 'compacted':
+    case 'note':
+      flushText();
+      live.textEl = null;
+      live.reasoningEl = null;
+      live.block.body.insertBefore(ev.kind === 'note' ? noteEl(ev.text) : compactionEl(ev.compaction), live.status);
+      break;
     case 'approval':
       showApproval(ev);
       break;
